@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- The Pyrsos name and logo are trademarks: see TRADEMARKS.md. -->
+<!-- The name in Latin letters, from brand/wordmark.svg; Greek is in drawable-el. Drawn white; the app tints it to the theme's accent. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="76.8dp"
+    android:height="16dp"
+    android:viewportWidth="285.5"
+    android:viewportHeight="59.5">
+    <group
+        android:translateX="5.75"
+        android:translateY="5.75">
+        <path
+            android:pathData="M6,48 L6,0 L18,0 A12,12 0 0 1 18,24 L6,24"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5.75"
+            android:strokeLineCap="square"
+            android:strokeLineJoin="miter" />
+        <path
+            android:pathData="M50,0 L65,22"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5.75"
+            android:strokeLineCap="square"
+            android:strokeLineJoin="miter" />
+        <path
+            android:pathData="M80,0 L65,22"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5.75"
+            android:strokeLineCap="square"
+            android:strokeLineJoin="miter" />
+        <path
+            android:pathData="M65,22 L65,48"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5.75"
+            android:strokeLineCap="square"
+            android:strokeLineJoin="miter" />
+        <path
+            android:pathData="M102,48 L102,0 L114,0 A12,12 0 0 1 114,24 L102,24"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5.75"
+            android:strokeLineCap="square"
+            android:strokeLineJoin="miter" />
+        <path
+            android:pathData="M112,24 L126,48"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5.75"
+            android:strokeLineCap="square"
+            android:strokeLineJoin="miter" />
+        <path
+            android:pathData="M173,5 C168,0 148,-1 148,11 C148,23 174,21 174,35 C174,49 152,49 147,42"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5.75"
+            android:strokeLineCap="square"
+            android:strokeLineJoin="miter" />
+        <path
+            android:pathData="M209,4 A20,20 0 1 1 208.99,4 Z"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5.75"
+            android:strokeLineCap="square"
+            android:strokeLineJoin="miter" />
+        <path
+            android:pathData="M269,5 C264,0 244,-1 244,11 C244,23 270,21 270,35 C270,49 248,49 243,42"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5.75"
+            android:strokeLineCap="square"
+            android:strokeLineJoin="miter" />
+    </group>
+</vector>

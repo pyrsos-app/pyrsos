@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<resources>
+    <string name="app_name" translatable="false">Pyrsos</string>
+    <string name="back">Back</string>
+
+    <string name="setup_title">Welcome to Pyrsos</string>
+    <string name="setup_text">Messages here travel from phone to phone over Bluetooth, with no internet. Choose the name your contacts will see.</string>
+    <string name="setup_name_label">Your name</string>
+    <string name="setup_start">Start</string>
+
+    <string name="home_empty">No contacts yet. When you meet someone, tap + and add each other.</string>
+    <string name="home_add">Add contact</string>
+    <string name="home_settings">Settings</string>
+    <string name="home_not_finished">Not finished adding you</string>
+
+    <string name="status_nearby">Phones nearby: %d</string>
+    <string name="status_bt_off">Bluetooth is off</string>
+    <string name="status_bt_turn_on">Turn on</string>
+    <string name="status_permission">Pyrsos needs the Nearby devices permission to find other phones</string>
+    <string name="status_grant">Allow</string>
+    <string name="status_unsupported">This phone cannot open Bluetooth channels to other phones</string>
+
+    <string name="add_title">Add contact</string>
+    <string name="add_intro">You must be together. One of you shows a code and the other scans it, then the other way round.</string>
+    <string name="add_show">Show my code</string>
+    <string name="add_scan">Scan their code</string>
+    <string name="add_show_steps">1. Let them scan this code.\n2. Then tap below and scan the code they show you.</string>
+    <string name="add_scan_reply">Scan their answer</string>
+    <string name="add_reply_steps">Now let them scan this code to finish.</string>
+    <string name="add_done">Done</string>
+    <string name="add_scan_prompt">Point the camera at the code on their screen</string>
+
+    <string name="err_not_pyrsos">This is not a Pyrsos code.</string>
+    <string name="err_version">This code comes from a different version of Pyrsos.</string>
+    <string name="err_reply_without_invite">That is an answer code. Tap “Show my code” first.</string>
+    <string name="err_bad_reply">That answer is not for the code you are showing. Let them scan your code again.</string>
+    <string name="err_own">This is your own code.</string>
+    <string name="err_camera">The camera is needed to scan codes.</string>
+
+    <string name="chat_not_finished">%s has not finished adding you. What you write reaches them only after they scan your answer code.</string>
+    <string name="chat_hint">Message</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_counter">%1$d / %2$d</string>
+    <string name="chat_empty">No messages yet.</string>
+
+    <string name="msg_waiting">Waiting for a phone nearby</string>
+    <plurals name="msg_passed">
+        <item quantity="one">Passed to %d phone</item>
+        <item quantity="other">Passed to %d phones</item>
+    </plurals>
+    <string name="msg_delivered">Delivered</string>
+
+    <string name="settings_title">Settings</string>
+    <string name="settings_name">Your name</string>
+    <string name="settings_theme">Theme</string>
+    <string name="theme_auto">Automatic</string>
+    <string name="theme_day">Day</string>
+    <string name="theme_night">Night</string>
+    <string name="settings_about">About</string>
+    <string name="about_text">Version %s</string>
+    <string name="status_passive">On this phone (Android 10 or 11) Pyrsos does not search for other phones itself, because Android would ask for the location permission, which Pyrsos never asks for. Newer phones find this one and connect to it, so messages still arrive, sometimes a little later. Two Android 10 or 11 phones alone do not find each other.</string>
+    <string name="settings_language">Language</string>
+    <string name="language_auto">Phone\'s language</string>
+    <string name="settings_name_save">Save</string>
+    <string name="settings_name_note">This name goes to the other phone when you add each other, and they see it in their contact list. If you change it, people you add from now on see the new name; people who already have you keep the name they got then.</string>
+    <string name="settings_name_saved">Saved</string>
+    <string name="settings_code">Your identity code</string>
+    <string name="settings_code_note">It never changes and cannot be copied. When you add someone, check that each phone shows the other\'s code.</string>
+    <string name="err_stale_invite">This code is old, or the two phones show different dates. Check the date on both phones and make a new code.</string>
+    <string name="err_already_contact">This person is already one of your contacts. To add them again, remove them first from the chat menu.</string>
+    <string name="err_forged">This code carries someone else\'s identity. Do not add this person.</string>
+    <string name="add_scan_progress">Parts read: %1$d of %2$d</string>
+    <string name="add_scan_cancel">Cancel</string>
+    <string name="settings_relay">Carry messages in the background</string>
+    <string name="settings_relay_note">Pyrsos passes messages to and from phones nearby even while it is closed. Android shows a silent notice for this. Stops by itself when the battery is low.</string>
+    <string name="relay_channel">Carrying messages</string>
+    <string name="relay_notice">Pyrsos is carrying messages</string>
+    <string name="tab_contacts">Contacts</string>
+    <string name="tab_add">Add</string>
+    <string name="bt_needed">Pyrsos sends and receives messages only over Bluetooth. Without it nothing arrives and nothing leaves.</string>
+    <string name="permission_title">Permission needed</string>
+    <string name="unsupported_title">Bluetooth channels not available</string>
+    <string name="later">Later</string>
+    <string name="ok">OK</string>
+    <string name="chat_clear">Delete conversation</string>
+    <string name="chat_clear_note">The messages are deleted from this phone only. Messages that have already left this phone are not deleted from other phones, and your contact keeps their copy.</string>
+    <string name="chat_remove">Remove contact</string>
+    <string name="chat_remove_note">The contact, its keys and the conversation are deleted from this phone only. Messages that have already left this phone are not deleted from other phones. To write to each other again you must add each other in person.</string>
+    <string name="delete">Delete</string>
+    <string name="cancel">Cancel</string>
+    <string name="pin_title">PIN</string>
+    <string name="pin_note">Optional. Asked every time you open Pyrsos.</string>
+    <string name="pin_set">Set PIN</string>
+    <string name="pin_change">Change PIN</string>
+    <string name="pin_remove">Remove PIN</string>
+    <string name="pin_new">New PIN (4 to 8 digits)</string>
+    <string name="pin_again">PIN again</string>
+    <string name="pin_mismatch">The two PINs differ.</string>
+    <string name="pin_enter">PIN</string>
+    <string name="pin_unlock">Open</string>
+    <string name="pin_wrong">Wrong PIN.</string>
+    <string name="pin_wait">Too many tries. Wait %d seconds.</string>
+    <string name="wipe_title">Delete everything</string>
+    <string name="wipe_short">Deletes all contacts, messages and your identity from this phone. Cannot be undone.</string>
+    <string name="wipe_note">All contacts, messages and your identity are deleted from this phone, together with the key that opens them. This cannot be undone. Messages that have already left this phone are not deleted from other phones. Pyrsos closes; open it again to start over with a new identity code.</string>
+    <string name="wipe_action">Delete everything</string>
+    <string name="pin_prompt">Enter your PIN</string>
+    <string name="section_you">You</string>
+    <string name="section_messages">Messages</string>
+    <string name="section_security">Security</string>
+    <string name="section_look">Appearance</string>
+    <string name="state_on">On</string>
+    <string name="state_off">Off</string>
+    <string name="pin_is_set">A PIN is set.</string>
+    <string name="pin_not_set">No PIN set.</string>
+    <string name="section_share">Share Pyrsos</string>
+    <string name="share_title">Send the app to someone next to you</string>
+    <string name="share_note">Sends the app over Bluetooth to a phone next to you, with no internet: pick their phone from the list. It takes a few minutes, and they must allow installing apps from Bluetooth or their file manager.</string>
+    <string name="share_action">Send over Bluetooth</string>
+    <string name="settings_name_change">Change</string>
+    <string name="settings_name_change_title">Change name</string>
+    <string name="share_no_bluetooth">This phone cannot send files over Bluetooth.</string>
+    <string name="close">Close</string>
+    <string name="stuck_title">Bluetooth is not connecting</string>
+    <string name="stuck_text">There are phones near you, but for a while now no connection to them has worked. This usually means your phone\'s Bluetooth has got stuck. Turn it off and on again, and Pyrsos starts again by itself.</string>
+    <string name="stuck_action">Bluetooth settings</string>
+    <string name="pin_phone_locked">Unlock your phone first.</string>
+    <string name="wipe_after_title">Delete after 10 wrong PINs</string>
+    <string name="wipe_after_note">If someone enters a wrong PIN 10 times in a row, Pyrsos deletes everything from this phone.</string>
+    <string name="duress_title">Duress PIN</string>
+    <string name="duress_note">A second PIN. If you enter it instead of your real one, Pyrsos silently deletes everything and opens as if just installed. Useful if you are forced to open it.</string>
+    <string name="duress_is_set">A duress PIN is set.</string>
+    <string name="duress_not_set">No duress PIN set.</string>
+    <string name="bt_name_title">Bluetooth name</string>
+    <string name="bt_name_note">Phones that connect to yours may be able to read this name, ones running Pyrsos too. A neutral name such as “Phone” says nothing about you.</string>
+    <string name="bt_name_unknown">Not available</string>
+    <string name="bt_name_change">Change in Bluetooth settings</string>
+    <string name="pin_no_screen_lock">Your phone has no screen lock. Without one the PIN protects much less: set a screen lock in the phone’s settings too.</string>
+    <string name="pin_is_duress">This is your duress PIN, which deletes everything. Choose another PIN.</string>
+    <string name="duress_same">The duress PIN must be different from your real PIN.</string>
+    <string name="autodelete_title">Delete messages automatically</string>
+    <string name="autodelete_note">Messages are deleted from this phone once they are older than this. They stay on the other phone. With a PIN, deleting happens when you open Pyrsos.</string>
+    <string name="autodelete_never">Never</string>
+    <string name="autodelete_day">1 day</string>
+    <string name="autodelete_week">1 week</string>
+    <string name="autodelete_month">1 month</string>
+    <string name="day_today">Today</string>
+    <string name="day_yesterday">Yesterday</string>
+    <string name="pin_note_off">You have no PIN. Setting one adds a layer of security: your contacts, keys and messages are locked with the PIN and your phone\'s screen lock, so that even someone who takes your phone with special tools cannot read them. Prefer a PIN of 6 digits or more.</string>
+    <string name="welcome_title">Welcome to Pyrsos</string>
+    <string name="welcome_bluetooth">Messages travel from phone to phone over Bluetooth, with no internet. Keep Bluetooth on.</string>
+    <string name="welcome_contacts">You add contacts only in person, with QR codes. Check together that each phone shows the other\'s identity code.</string>
+    <string name="welcome_open">Pyrsos carries messages even while closed, but it shows no notifications for new ones: open it to see if you have any.</string>
+    <string name="welcome_pin">For extra security, set a PIN. Your messages are then locked, and someone who takes your phone cannot read them.</string>
+    <string name="licences_title">Open source licences</string>
+</resources>

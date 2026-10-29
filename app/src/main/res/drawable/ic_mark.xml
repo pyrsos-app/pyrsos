@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- The Pyrsos name and logo are trademarks: see TRADEMARKS.md. -->
+<!-- The mark from brand/logo-mono.svg. Drawn white; the app tints it to the theme's accent. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="28dp"
+    android:height="29.68dp"
+    android:viewportWidth="58.57"
+    android:viewportHeight="62.09">
+    <group
+        android:translateX="-25.84"
+        android:translateY="-22.69">
+        <path
+            android:pathData="M33.09 74.71 C34.23 72.45 35.02 70.75 37.05 70.75 C42.14 70.75 44.96 77.53 49.48 77.53 C54.56 77.53 59.09 65.1 67.56 65.1 C73.21 65.1 75.47 69.62 77.16 73.02"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="6.5"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M70.05 26.69 C70.79 33.47 79.99 38.89 79.99 48.72 C79.99 55.84 74.52 60.59 67.56 60.59 C60.6 60.59 55.13 55.84 55.13 48.38 C55.13 42.62 57.37 38.89 59.85 35.5 C60.6 39.23 62.34 41.6 64.83 42.96 C64.33 36.86 66.32 31.09 70.05 26.69 Z"
+            android:fillColor="#FFFFFFFF" />
+        <path
+            android:pathData="M38.24 49.28 C38.6 52.67 42.98 55.39 42.98 60.3 C42.98 63.86 40.37 66.23 37.05 66.23 C33.73 66.23 31.12 63.86 31.12 60.13 C31.12 57.25 32.19 55.39 33.37 53.69 C33.73 55.56 34.56 56.74 35.74 57.42 C35.5 54.37 36.46 51.49 38.24 49.28 Z"
+            android:fillColor="#FFFFFFFF" />
+    </group>
+</vector>

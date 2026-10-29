@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- The only file Pyrsos ever hands to another app: a copy of its own APK, to pass it on. -->
+<paths>
+    <cache-path name="share" path="share/" />
+</paths>
