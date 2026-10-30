@@ -49,6 +49,8 @@
         <item quantity="one">Passed to %d phone</item>
         <item quantity="other">Passed to %d phones</item>
     </plurals>
+    <string name="msg_written_arrived">Written %1$s · arrived %2$s</string>
+    <string name="msg_delivered_at">Delivered %s</string>
     <string name="msg_delivered">Delivered</string>
 
     <string name="settings_title">Settings</string>

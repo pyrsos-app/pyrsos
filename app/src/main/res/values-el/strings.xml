@@ -48,6 +48,8 @@
         <item quantity="one">Πέρασε σε %d κινητό</item>
         <item quantity="other">Πέρασε σε %d κινητά</item>
     </plurals>
+    <string name="msg_written_arrived">Γράφτηκε %1$s · έφτασε %2$s</string>
+    <string name="msg_delivered_at">Παραδόθηκε %s</string>
     <string name="msg_delivered">Παραδόθηκε</string>
 
     <string name="settings_title">Ρυθμίσεις</string>

@@ -41,7 +41,7 @@ protects and what it does not.
 
 ## Status
 
-**Preview, version 0.1.0.** It works between phones and has been tested on a handful of them, but
+**Preview, version 0.2.0.** It works between phones and has been tested on a handful of them, but
 the code has not had an independent security audit yet. Do not rely on it as your only way to
 reach people in a real emergency until it has.
 
@@ -50,7 +50,9 @@ Next: groups, and seeing which of your contacts are nearby.
 ## Install
 
 Android 10 or later, with Bluetooth LE. On Android 10 and 11 a phone only waits to be found, since
-searching there would need the location permission; newer phones nearby find it and connect.
+searching there would need the location permission; newer phones nearby find it and connect. So
+two phones on Android 10 or 11 cannot reach each other directly: their messages need a phone on
+Android 12 or later to pass between them.
 
 Pyrsos is distributed only as an APK, signed by the project key: from this repository's
 [Releases](https://github.com/pyrsos-app/pyrsos/releases), from https://pyrsos.app, or from
@@ -96,6 +98,32 @@ A copy from someone you do not know may not be the real Pyrsos. Only the signing
 
 An app cannot vouch for itself: a fake could show the right fingerprint on its own screens. That is
 why the check goes through AppVerifier or apksigner, which read what the system itself holds.
+
+## Using it
+
+### Adding a contact
+
+You add someone only when you are together, phone next to phone:
+
+1. **Only one** of you taps **Show my code**; the other taps **Scan their code** and scans it.
+2. The phone that scanned now shows an answer code.
+3. The one who showed the first code taps **Scan their answer** and scans it.
+
+Each phone then shows the other's identity code at the top of the chat: check together that they
+match. If you both tap Show my code by mistake, the app tells one of you to scan the other's answer
+instead.
+
+### Times on messages
+
+A message you write shows when you wrote it, and **Delivered** once the receipt comes back. A
+message you receive shows when it arrived. Messages can take hours or days to travel from phone to
+phone, so when that took more than 5 minutes the other time is shown too:
+
+- on a message you received: *Written 10:00 · arrived 18:00*;
+- on one you sent: *10:00 · Delivered 18:00*, the time the receipt reached your phone.
+
+When the two times fall on different days, the date is shown as well (*31/10/2026 10:00*). The
+writing time comes from the writer's phone, so it is only as right as that phone's clock.
 
 ## Build
 

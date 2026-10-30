@@ -91,9 +91,14 @@ class Messenger(private val context: Context, private val outer: Store) {
         val id: String,
         val outgoing: Boolean,
         val text: String,
+        /** When it was written here (own) or arrived here (received): the order the chat shows. */
         val at: Long,
         val delivered: Boolean,
         val handed: Int,
+        /** When the writer wrote it, by the writer's clock. */
+        val sentAt: Long,
+        /** Own messages: when the receipt came back to this phone; null if not yet, or not known. */
+        val deliveredAt: Long?,
     )
 
     sealed class ScanResult {
@@ -165,9 +170,14 @@ class Messenger(private val context: Context, private val outer: Store) {
     suspend fun messages(contactId: String): List<MessageRow> = io {
         if (isLocked) return@io emptyList()
         val rows = data.query(
-            "SELECT id, outgoing, text, at, delivered, handed FROM messages WHERE contact_id = ? ORDER BY at",
+            "SELECT id, outgoing, text, at, delivered, handed, sent_at, delivered_at FROM messages WHERE contact_id = ? ORDER BY at",
             contactId,
-        ) { c -> MessageRow(c.getBlob(0).toHex(), c.getInt(1) == 1, c.getString(2), c.getLong(3), c.getInt(4) == 1, c.getInt(5)) }
+        ) { c ->
+            MessageRow(
+                c.getBlob(0).toHex(), c.getInt(1) == 1, c.getString(2), c.getLong(3), c.getInt(4) == 1, c.getInt(5), c.getLong(6),
+                if (c.isNull(7)) null else c.getLong(7),
+            )
+        }
         rows
     }
 
@@ -245,13 +255,30 @@ class Messenger(private val context: Context, private val outer: Store) {
             val id = contactId(est.peerIdentity)
             data.tx {
                 saveContact(id, est, confirmed = true)
-                var at = now - (count - i) * 3_600_000L
+                // Spread over the last few days, so the chat shows its day lines (today, yesterday...).
+                val step = 9_000_000L
+                var at = now - messagesEach * (step + 7 * 60_000L) - i * 600_000L
                 repeat(messagesEach) { j ->
-                    at += 60_000L * (1 + j % 7)
+                    at += step + 60_000L * (1 + j % 7)
                     val outgoing = j % 3 == 1
+                    // Some received messages took long to come: hours, or since an earlier day.
+                    val late = when {
+                        outgoing -> 0L
+                        j % 9 == 0 -> 30 * 3_600_000L
+                        j % 6 == 0 -> 3 * 3_600_000L
+                        j % 4 == 0 -> 20 * 60_000L
+                        else -> 0L
+                    }
+                    // And some receipts for own messages came back late.
+                    val deliveredAt = when {
+                        !outgoing -> null
+                        j % 5 == 1 -> at + 26 * 3_600_000L
+                        j % 2 == 1 -> at + 2 * 3_600_000L
+                        else -> at + 30_000L
+                    }?.coerceAtMost(now)
                     data.exec(
-                        "INSERT INTO messages (id, contact_id, outgoing, text, sent_at, at, delivered, read) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
-                        Crypto.random(Payload.ID_SIZE), id, if (outgoing) 1 else 0, lines[(i + j) % lines.size], at, at, if (outgoing) 1 else 0,
+                        "INSERT INTO messages (id, contact_id, outgoing, text, sent_at, at, delivered, read, delivered_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
+                        Crypto.random(Payload.ID_SIZE), id, if (outgoing) 1 else 0, lines[(i + j) % lines.size], at - late, at, if (outgoing) 1 else 0, deliveredAt,
                     )
                 }
                 data.exec("UPDATE contacts SET last_at = ? WHERE id = ?", at, id)
@@ -1011,7 +1038,11 @@ class Messenger(private val context: Context, private val outer: Store) {
                 )
             }
             is Payload.Ack -> p.ids.forEach {
-                data.exec("UPDATE messages SET delivered = 1 WHERE id = ? AND contact_id = ? AND outgoing = 1", it, contactId)
+                // The first receipt counts: later copies of it change nothing.
+                data.exec(
+                    "UPDATE messages SET delivered = 1, delivered_at = COALESCE(delivered_at, ?) WHERE id = ? AND contact_id = ? AND outgoing = 1",
+                    System.currentTimeMillis(), it, contactId,
+                )
             }
             Payload.Hello -> Unit
         }

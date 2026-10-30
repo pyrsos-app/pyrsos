@@ -725,7 +725,7 @@ fun ChatScreen(messenger: Messenger, contactId: String, onBack: () -> Unit) {
             items(rows, key = { it.key }) { row ->
                 when (row) {
                     is ChatRow.Day -> DayLine(row.day)
-                    is ChatRow.Message -> Bubble(row.m, timeFormat.format(Date(row.m.at)))
+                    is ChatRow.Message -> Bubble(row.m, timeLabel(row.m, timeFormat), deliveredLabel(row.m, timeFormat))
                 }
             }
         }
@@ -813,8 +813,47 @@ private fun DayLine(day: LocalDate) {
     }
 }
 
+/**
+ * The time under a message: when it was written for own messages, when it arrived for received
+ * ones. An own message whose receipt took long to come back also says when that was. A received message that took long to come also says when it was written, so "I am fine"
+ * from eight hours ago does not pass for news. The writer's clock may be wrong: a writing time
+ * after the arrival is not shown.
+ */
 @Composable
-private fun Bubble(m: Messenger.MessageRow, time: String) {
+private fun timeLabel(m: Messenger.MessageRow, timeFormat: DateFormat): String {
+    val arrived = timeFormat.format(Date(m.at))
+    val late = m.at - m.sentAt
+    if (m.outgoing || late < LATE_SHOWN_MS || m.sentAt <= 0) return arrived
+    return stringResource(R.string.msg_written_arrived, dayAwareTime(m.sentAt, m.at, timeFormat), arrived)
+}
+
+/** "Delivered", with the time the receipt came back when that was long after writing. */
+@Composable
+private fun deliveredLabel(m: Messenger.MessageRow, timeFormat: DateFormat): String {
+    val at = m.deliveredAt
+    if (at == null || at - m.at < LATE_SHOWN_MS) return stringResource(R.string.msg_delivered)
+    return stringResource(R.string.msg_delivered_at, dayAwareTime(at, m.at, timeFormat))
+}
+
+/** [t] as a time, with the date too (dd/mm/yyyy) when it falls on another day than [ref]. */
+private fun dayAwareTime(t: Long, ref: Long, timeFormat: DateFormat): String {
+    val zone = ZoneId.systemDefault()
+    val day = Instant.ofEpochMilli(t).atZone(zone).toLocalDate()
+    val time = timeFormat.format(Date(t))
+    return if (day == Instant.ofEpochMilli(ref).atZone(zone).toLocalDate()) time else day.format(DAY_FORMAT) + " " + time
+}
+
+private val DAY_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy")
+
+/**
+ * How late a message or its receipt must be before the other time is shown too. Between phones
+ * next to each other a message comes within a minute and its receipt in one or two (it waits
+ * 6 to 60 seconds on purpose), so five minutes shows only real delays. One minute in debug builds.
+ */
+private val LATE_SHOWN_MS = if (BuildConfig.DEBUG) 60_000L else 5 * 60_000L
+
+@Composable
+private fun Bubble(m: Messenger.MessageRow, time: String, delivered: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (m.outgoing) Arrangement.End else Arrangement.Start) {
         Surface(
             color = if (m.outgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
@@ -827,7 +866,7 @@ private fun Bubble(m: Messenger.MessageRow, time: String) {
                 Spacer(Modifier.height(4.dp))
                 val status = when {
                     !m.outgoing -> time
-                    m.delivered -> "$time · " + stringResource(R.string.msg_delivered)
+                    m.delivered -> "$time · $delivered"
                     m.handed > 0 -> "$time · " + pluralStringResource(R.plurals.msg_passed, m.handed, m.handed)
                     else -> "$time · " + stringResource(R.string.msg_waiting)
                 }

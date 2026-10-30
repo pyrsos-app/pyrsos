@@ -211,6 +211,11 @@ class Store private constructor(file: File, key: ByteArray, migrations: List<Lis
             "ALTER TABLE messages ADD COLUMN handed INTEGER NOT NULL DEFAULT 0",
         )
 
+        private val DATA_V3 get() = listOf(
+            // When the receipt for an own message arrived; null for messages from before.
+            "ALTER TABLE messages ADD COLUMN delivered_at INTEGER",
+        )
+
         private val OUTER = listOf(
             SCHEMA_V1,
             // Small settings: the vault's wrapped key, PIN counters.
@@ -227,8 +232,9 @@ class Store private constructor(file: File, key: ByteArray, migrations: List<Lis
                 "ALTER TABLE envelopes DROP COLUMN handed",
                 "CREATE INDEX envelopes_by_expiry ON envelopes(expiry_day)",
             ),
+            DATA_V3,
         )
 
-        private val VAULT = listOf(SCHEMA_V1.filterNot { "envelopes" in it }, DATA_V2)
+        private val VAULT = listOf(SCHEMA_V1.filterNot { "envelopes" in it }, DATA_V2, DATA_V3)
     }
 }
