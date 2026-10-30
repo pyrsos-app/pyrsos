@@ -14,7 +14,7 @@ are in app/src/main/assets/licenses/.
 | ZXing core (QR code drawing) | 3.5.3 | Apache-2.0, with its NOTICE | ZXing authors |
 | zxing-cpp (QR code reading) | 3.0.2 | Apache-2.0 | zxing-cpp authors |
 | Bouncy Castle | 1.86 | MIT (Bouncy Castle Licence) | The Legion of the Bouncy Castle Inc. |
-| SQLCipher for Android | 4.10.0 | BSD-3-Clause | Zetetic LLC |
+| SQLCipher for Android | 4.19.1 | BSD-3-Clause | Zetetic LLC |
 | ├ SQLite, inside SQLCipher | | Public domain | |
 | └ OpenSSL, inside SQLCipher | 3.0.17 | Apache-2.0 | The OpenSSL Project Authors |
 | Commissioner typeface | | SIL Open Font License 1.1 | The Commissioner Project Authors |

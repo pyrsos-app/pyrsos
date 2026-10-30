@@ -64,28 +64,27 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
         object NeedsPermission : State
         object BluetoothOff : State
         object Unsupported : State
-        /** [searching] is false on phones that can only wait to be found. */
-        class Running(val peers: Int, val searching: Boolean) : State
+        /**
+         * [searching] is false on phones that can only wait to be found. [degraded]: announcing or
+         * searching keeps failing, so phones may not find this one (or this one them).
+         */
+        class Running(val peers: Int, val searching: Boolean, val degraded: Boolean = false) : State
     }
 
     private val _state = MutableStateFlow<State>(State.Stopped)
 
     /**
      * True when phones are heard but every call to them has failed for a long time: the phone's own
-     * Bluetooth has most likely got stuck, which only turning it off and on again cures. From
-     * Android 13 on, apps may not do that themselves, so the screen asks the person to.
+     * Bluetooth has most likely got stuck, which only turning it off and on again cures. This app
+     * never does that itself: a record anyone can fake must not be able to cut the person's other
+     * Bluetooth devices off, so the screen asks the person to.
      */
     private val _stuck = MutableStateFlow(false)
     val stuck: StateFlow<Boolean> = _stuck
 
-    /** Calls in a row that failed, to any phone, and when one last worked. */
+    /** Calls in a row that failed and count against the radio (see [callFailed]), and when one last worked. */
     private val failedInARow = AtomicInteger(0)
     @Volatile private var lastSuccess = SystemClock.elapsedRealtime()
-
-    /** Set while this app turns Bluetooth off itself, so it turns it on again (Android 10 to 12). */
-    @Volatile private var restartingRadio = false
-    /** When this app last turned Bluetooth off and on itself. */
-    @Volatile private var lastRadioRestart = Long.MIN_VALUE / 2
     val state: StateFlow<State> = _state
 
     private val adapter: BluetoothAdapter? = context.getSystemService(BluetoothManager::class.java)?.adapter
@@ -97,18 +96,44 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
     @Volatile private var nonce = 0
     @Volatile private var psm = 0
 
+    /** Failed starts in a row of announcing and of searching, and the retries waiting. Main thread. */
+    private var advertiseFailures = 0
+    private var scanFailures = 0
+    private var advertiseRetry: Job? = null
+    private var scanRetry: Job? = null
+    /** When searching was last started, newest last: Android allows five starts per 30 seconds. */
+    private val scanStarts = ArrayDeque<Long>()
+    @Volatile private var degraded = false
+
     /** Peers by nonce: when last heard, and when first heard in this sighting. */
     private val seen = ConcurrentHashMap<Int, Pair<Long, Long>>()
     /** When this phone last met each peer it called. Keyed by the nonce it called. */
     private val lastSync = ConcurrentHashMap<Int, Long>()
     /**
-     * When peers last called this phone, by the nonce they gave. That nonce is only their word, so
-     * it never stops this phone from making a call that is its turn to make; see [heard].
+     * When peers last called this phone, by the address of the channel they called on: the nonce in
+     * their HELLO is only their word and must not be able to stop this phone's own calls.
      */
-    private val answered = ConcurrentHashMap<Int, Long>()
+    private val answered = ConcurrentHashMap<String, Long>()
     private val dialing = ConcurrentHashMap.newKeySet<Int>()
+    private val dialingAddresses = ConcurrentHashMap.newKeySet<String>()
     /** Failed calls in a row, per peer nonce; cleared by a call that works. */
     private val failures = ConcurrentHashMap<Int, Int>()
+
+    /**
+     * Per remote address, which a made-up record cannot change as cheaply as its nonce: the earliest
+     * time to call it again, its failed calls in a row, and when a call to it last worked.
+     */
+    private val dialAfter = ConcurrentHashMap<String, Long>()
+    private val addressFailures = ConcurrentHashMap<String, Int>()
+    private val met = ConcurrentHashMap<String, Long>()
+    /** Addresses whose call could not connect lately, and when; see [callFailed]. */
+    private val unreachable = ConcurrentHashMap<String, Long>()
+    @Volatile private var lastStrangerDial = Long.MIN_VALUE / 2
+
+    /** Answering, per remote address: calls in progress, when to take the next, envelopes taken this hour. */
+    private val answeringAddresses = ConcurrentHashMap.newKeySet<String>()
+    private val answerAfter = ConcurrentHashMap<String, Long>()
+    private val taken = ConcurrentHashMap<String, Pair<Long, Int>>()
 
     /** One outgoing call at a time; the radio is shared and the store is single-threaded anyway. */
     private val exchange = Mutex()
@@ -156,11 +181,6 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
                     if (wanted && _state.value is State.Running) {
                         halt()
                         _state.value = State.BluetoothOff
-                    }
-                    if (restartingRadio) {
-                        restartingRadio = false
-                        @Suppress("DEPRECATION", "MissingPermission")
-                        adapter?.enable()
                     }
                 }
                 BluetoothAdapter.STATE_ON -> {
@@ -218,6 +238,9 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
                 listen(adapter)
             }
         }
+        advertiseFailures = 0
+        scanFailures = 0
+        degraded = false
         jobs += scope.launch {
             while (isActive) {
                 updatePeers()
@@ -271,6 +294,8 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
         }
         advertising = null
         scanning = null
+        advertiseRetry?.cancel()
+        scanRetry?.cancel()
         try {
             server?.close()
         } catch (_: IOException) {
@@ -278,6 +303,7 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
         server = null
         seen.clear()
         dialing.clear()
+        dialingAddresses.clear()
         failures.clear()
     }
 
@@ -308,17 +334,49 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
             .addServiceData(SERVICE, record)
             .build()
         val callback = object : AdvertiseCallback() {
+            override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
+                advertiseFailures = 0
+            }
+
             override fun onStartFailure(errorCode: Int) {
                 Log.w(TAG, "advertising failed: $errorCode")
+                if (errorCode == AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED) return
+                if (advertising !== this) return // replaced since
+                val n = advertiseFailures++
+                if (n >= TROUBLE_AFTER) degraded = true
+                advertiseRetry?.cancel()
+                // Too many advertisers or an internal error clears on its own; an unsupported
+                // feature does not, so that one is not retried.
+                if (errorCode == AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED) return run { degraded = true }
+                val failed = this
+                advertiseRetry = scope.launch(Dispatchers.Main) {
+                    delay(retryDelay(n))
+                    if (isActive && wanted && _state.value is State.Running && advertising === failed) advertise(adapter)
+                }
             }
         }
         advertising = callback
-        advertiser.startAdvertising(settings, data, callback)
+        try {
+            advertiser.startAdvertising(settings, data, callback)
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "cannot start advertising: ${e.message}")
+        }
     }
+
+    /** Backoff for restarting announcing or searching: 5 s, doubling, up to 5 minutes. */
+    private fun retryDelay(failures: Int) = minOf(RESTART_BASE_MS shl minOf(failures, 6), MAX_RESTART_WAIT_MS)
 
     @SuppressLint("MissingPermission")
     private fun scan(adapter: BluetoothAdapter) {
         val scanner = adapter.bluetoothLeScanner ?: return run { _state.value = State.Unsupported }
+        // Past five starts in 30 seconds Android silently stops delivering results.
+        val now = SystemClock.elapsedRealtime()
+        while (scanStarts.isNotEmpty() && now - scanStarts.first() > SCAN_START_WINDOW_MS) scanStarts.removeFirst()
+        if (scanStarts.size >= MAX_SCAN_STARTS) {
+            scheduleScan(scanStarts.first() + SCAN_START_WINDOW_MS - now + 1_000)
+            return
+        }
+        scanStarts.addLast(now)
         val filter = ScanFilter.Builder()
             .setServiceData(SERVICE, byteArrayOf(RECORD_VERSION.toByte()), byteArrayOf(0xff.toByte()))
             .build()
@@ -330,16 +388,47 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
             override fun onBatchScanResults(results: MutableList<ScanResult>) = results.forEach(::heard)
             override fun onScanFailed(errorCode: Int) {
                 Log.w(TAG, "scan failed: $errorCode")
+                if (errorCode == ScanCallback.SCAN_FAILED_ALREADY_STARTED) return
+                if (scanning !== this) return // replaced since
+                scanning = null
+                val n = scanFailures++
+                if (n >= TROUBLE_AFTER) degraded = true
+                scheduleScan(retryDelay(n))
             }
         }
         scanning = callback
-        scanner.startScan(listOf(filter), settings, callback)
+        try {
+            scanner.startScan(listOf(filter), settings, callback)
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "cannot start searching: ${e.message}")
+            scanning = null
+            scheduleScan(retryDelay(scanFailures++))
+        }
+    }
+
+    /** Starts searching again after [wait], unless something else has by then. Main thread only. */
+    private fun scheduleScan(wait: Long) {
+        scanRetry?.cancel()
+        scanRetry = scope.launch(Dispatchers.Main) {
+            delay(wait)
+            val a = adapter
+            if (!isActive || a == null || !wanted || _state.value !is State.Running || scanning != null) return@launch
+            scan(a)
+            // No failure callback soon after a start means it took.
+            val started = scanning ?: return@launch
+            delay(SCAN_SETTLE_MS)
+            if (scanning === started) {
+                scanFailures = 0
+                degraded = advertiseFailures >= TROUBLE_AFTER
+            }
+        }
     }
 
     private fun heard(result: ScanResult) {
         val record = result.scanRecord?.getServiceData(SERVICE) ?: return
         if (record.size != 7 || record[0].toInt() != RECORD_VERSION) return
         val peerPsm = ((record[1].toInt() and 0xff) shl 8) or (record[2].toInt() and 0xff)
+        scanFailures = 0
         val peerNonce = ((record[3].toInt() and 0xff) shl 24) or ((record[4].toInt() and 0xff) shl 16) or
             ((record[5].toInt() and 0xff) shl 8) or (record[6].toInt() and 0xff)
         if (peerNonce == nonce) return
@@ -352,14 +441,26 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
         // Of two phones, the one with the lower nonce calls. The other calls only if that has not
         // happened for a while, as when the first cannot search.
         val mineFirst = Integer.compareUnsigned(nonce, peerNonce) < 0
-        val calledMe = (answered[peerNonce] ?: Long.MIN_VALUE / 2) > now - RESYNC_MS
+        val address = result.device.address
+        val calledMe = (answered[address] ?: Long.MIN_VALUE / 2) > now - RESYNC_MS
+        if (now < (dialAfter[address] ?: Long.MIN_VALUE / 2)) return
         if (mineFirst || (now - first > DIAL_ANYWAY_MS && !calledMe)) dial(result.device, peerPsm, peerNonce)
     }
 
     @SuppressLint("MissingPermission")
     private fun dial(device: BluetoothDevice, peerPsm: Int, peerNonce: Int) {
         // Calls wait for one another; a crowd of records, real or made up, must not pile them up.
-        if (dialing.size >= MAX_DIALING || !dialing.add(peerNonce)) return
+        // Nonces cost nothing to invent, so limits also run per address: one call at a time to it,
+        // a pause between calls, and a longer one after each failure. Addresses never met get one
+        // call at a time per few seconds and leave a slot free for those that have been met.
+        val address = device.address
+        val now = SystemClock.elapsedRealtime()
+        val known = met.containsKey(address)
+        if (!known && (now - lastStrangerDial < STRANGER_DIAL_GAP_MS || dialing.size >= MAX_DIALING - 1)) return
+        if (dialing.size >= MAX_DIALING || !dialingAddresses.add(address)) return
+        if (!dialing.add(peerNonce)) return run { dialingAddresses.remove(address) }
+        if (!known) lastStrangerDial = now
+        dialAfter[address] = now + ADDRESS_DIAL_GAP_MS
         scope.launch(Dispatchers.IO) {
             try {
                 exchange.withLock {
@@ -371,13 +472,25 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
                         Log.w(TAG, "cannot open a channel: ${e.message}")
                         return@withLock
                     }
-                    val outcome = talk(socket, peerNonce) { socket.connect() }
+                    val outcome = talk(socket, peerNonce, address) { socket.connect() }
                     if (outcome == Outcome.WORKED) {
                         failures.remove(peerNonce)
+                        addressFailures.remove(address)
+                        unreachable.remove(address)
+                        met[address] = SystemClock.elapsedRealtime()
+                        dialAfter[address] = SystemClock.elapsedRealtime() + ADDRESS_DIAL_GAP_MS
                     } else {
                         // Only a call that could not even connect says anything about this phone's
-                        // Bluetooth; a peer that breaks off an exchange says nothing about it.
-                        if (outcome == Outcome.NO_CONNECTION) callFailed()
+                        // Bluetooth; a peer that breaks off an exchange says nothing about it. Nor
+                        // does a record nobody answers, which anyone can make up: it counts only if
+                        // the address was met before or several addresses have failed lately.
+                        if (outcome == Outcome.NO_CONNECTION) {
+                            unreachable[address] = SystemClock.elapsedRealtime()
+                            if (known || unreachable.size >= STUCK_ADDRESSES) callFailed()
+                        }
+                        val m = addressFailures.merge(address, 1, Int::plus)!!
+                        dialAfter[address] = SystemClock.elapsedRealtime() +
+                            minOf(RETRY_AFTER_FAILURE_MS shl minOf(m - 1, 5), MAX_RETRY_WAIT_MS)
                         // A phone that cannot be reached now is tried again later, waiting twice as
                         // long after each failure: hammering an unreachable phone drains the battery
                         // and can wedge the phone's own Bluetooth.
@@ -388,10 +501,12 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
                 }
             } finally {
                 dialing.remove(peerNonce)
+                dialingAddresses.remove(address)
             }
         }
     }
 
+    @SuppressLint("MissingPermission")
     private suspend fun acceptLoop(listener: BluetoothServerSocket) {
         while (true) {
             val socket = try {
@@ -399,9 +514,23 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
             } catch (_: IOException) {
                 return // closed by stop()
             }
-            // A phone that opens channel after channel gets only a few at a time.
+            // A phone that opens channel after channel gets only a few at a time, and one address
+            // only one, after a pause, until its hourly allowance of envelopes is used up.
+            val address = try {
+                socket.remoteDevice.address
+            } catch (_: Exception) {
+                closeQuietly(socket)
+                continue
+            }
+            if (SystemClock.elapsedRealtime() < (answerAfter[address] ?: Long.MIN_VALUE / 2) ||
+                budgetLeft(address) <= 0 || !answeringAddresses.add(address)
+            ) {
+                closeQuietly(socket)
+                continue
+            }
             if (answering.incrementAndGet() > MAX_ANSWERING) {
                 answering.decrementAndGet()
+                answeringAddresses.remove(address)
                 closeQuietly(socket)
                 continue
             }
@@ -409,21 +538,36 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
             // other to answer while holding the lock that answering needs.
             scope.launch(Dispatchers.IO) {
                 try {
-                    talk(socket, null) {}
+                    val outcome = talk(socket, null, address) {}
+                    // A call that went wrong waits longer before the next is taken.
+                    val pause = if (outcome == Outcome.WORKED) ANSWER_GAP_MS else ANSWER_PENALTY_MS
+                    answerAfter[address] = SystemClock.elapsedRealtime() + pause
                 } finally {
+                    answeringAddresses.remove(address)
                     answering.decrementAndGet()
                 }
             }
         }
     }
 
+    /** Envelopes this phone may still take from [address] this hour. */
+    private fun budgetLeft(address: String): Int {
+        val e = taken[address] ?: return MAX_TAKEN_PER_HOUR
+        return if (SystemClock.elapsedRealtime() - e.first > HOUR_MS) MAX_TAKEN_PER_HOUR else maxOf(0, MAX_TAKEN_PER_HOUR - e.second)
+    }
+
+    private fun charge(address: String, n: Int) {
+        if (n <= 0) return
+        val now = SystemClock.elapsedRealtime()
+        taken.compute(address) { _, e -> if (e == null || now - e.first > HOUR_MS) now to n else e.first to e.second + n }
+    }
+
     /**
      * Counts a call that could not connect. After [SOFT_RESET_AFTER] in a row this app restarts its
      * own part of Bluetooth (announcing, searching, its channel). If calls still fail and none has
-     * worked for [STUCK_AFTER_MS], the phone's Bluetooth is taken to be stuck: later Android allows
-     * only the person to turn it off and on, so [stuck] asks them. On Android 10 to 12 this app does
-     * it itself, but only after [RADIO_RESTART_AFTER_MS] without success and at most once per
-     * [RADIO_RESTART_EVERY_MS]: turning the radio off cuts every other Bluetooth device too.
+     * worked for [STUCK_AFTER_MS], the phone's Bluetooth is taken to be stuck and [stuck] asks the
+     * person to turn it off and on. The app never does that itself, on any Android: turning the
+     * radio off cuts every other Bluetooth device too, and the signal can be faked from outside.
      */
     private fun callFailed() {
         val n = failedInARow.incrementAndGet()
@@ -431,20 +575,7 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
         val sinceSuccess = now - lastSuccess
         if (n >= STUCK_AFTER_FAILURES && sinceSuccess >= STUCK_AFTER_MS) {
             Log.w(TAG, "Bluetooth looks stuck: $n failed calls, none worked for ${sinceSuccess / 1000} s")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                _stuck.value = true
-            } else if (!restartingRadio && sinceSuccess >= RADIO_RESTART_AFTER_MS && now - lastRadioRestart >= RADIO_RESTART_EVERY_MS) {
-                restartingRadio = true
-                lastRadioRestart = now
-                failedInARow.set(0)
-                @Suppress("DEPRECATION", "MissingPermission")
-                if (adapter?.disable() != true) {
-                    restartingRadio = false
-                    _stuck.value = true
-                }
-            } else {
-                _stuck.value = true
-            }
+            _stuck.value = true
         } else if (n % SOFT_RESET_AFTER == 0) {
             Log.w(TAG, "$n failed calls in a row: restarting this app's Bluetooth")
             scope.launch(Dispatchers.Main) {
@@ -469,23 +600,26 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
      * Runs one exchange on [socket]. [dialed]: the nonce this phone called, which the other must
      * then give; null when it answered a call.
      */
-    private suspend fun talk(socket: BluetoothSocket, dialed: Int?, open: () -> Unit): Outcome {
+    private suspend fun talk(socket: BluetoothSocket, dialed: Int?, address: String, open: () -> Unit): Outcome {
         // A blocking read ignores cancellation; closing the socket is what ends it. So the whole
         // exchange has a deadline, and Sync closes it sooner when the other phone goes quiet.
         val deadline = scope.launch {
-            delay(EXCHANGE_TIMEOUT_MS)
+            delay(if (dialed != null) EXCHANGE_TIMEOUT_MS else ANSWER_TIMEOUT_MS)
             closeQuietly(socket)
         }
         var connected = false
+        var sync: Sync? = null
         return try {
             open()
             connected = true
-            val r = Sync(socket.inputStream, socket.outputStream) { closeQuietly(socket) }.run(messenger, nonce, dialed)
+            // A phone that called us may push only so much per hour, however often it comes back.
+            sync = Sync(socket.inputStream, socket.outputStream, if (dialed == null) budgetLeft(address) else Int.MAX_VALUE, dialed == null) { closeQuietly(socket) }
+            val r = sync.run(messenger, nonce, dialed)
             // Our GOT may still be on its way; closing now would drop it.
             delay(CLOSE_LINGER_MS)
             // Receipts for what opened go out later, after a random delay (see
             // Messenger.sealDueAcks); sealing them clears this and the phones meet again.
-            if (dialed != null) lastSync[dialed] = SystemClock.elapsedRealtime() else answered[r.peerNonce] = SystemClock.elapsedRealtime()
+            if (dialed != null) lastSync[dialed] = SystemClock.elapsedRealtime() else answered[address] = SystemClock.elapsedRealtime()
             Log.i(TAG, "exchange: received ${r.received}, sent ${r.sent}, opened ${r.opened}")
             callWorked()
             Outcome.WORKED
@@ -495,6 +629,7 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
             Log.w(TAG, "exchange failed: ${e.javaClass.simpleName}: ${e.message}")
             if (connected) Outcome.FAILED else Outcome.NO_CONNECTION
         } finally {
+            if (dialed == null) charge(address, sync?.taken ?: 0)
             deadline.cancel()
             closeQuietly(socket)
         }
@@ -510,11 +645,21 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
     private fun updatePeers() {
         val now = SystemClock.elapsedRealtime()
         seen.entries.removeIf { now - it.value.first > PEER_TIMEOUT_MS }
+        // Nothing here is kept longer than it can matter. Failure counts follow their backoff entry.
+        lastSync.entries.removeIf { now - it.value > PRUNE_AFTER_MS }
+        failures.keys.removeIf { !lastSync.containsKey(it) }
+        answered.entries.removeIf { now - it.value > PRUNE_AFTER_MS }
+        dialAfter.entries.removeIf { now - it.value > PRUNE_AFTER_MS }
+        addressFailures.keys.removeIf { !dialAfter.containsKey(it) }
+        met.entries.removeIf { now - it.value > MET_MEMORY_MS }
+        unreachable.entries.removeIf { now - it.value > UNREACHABLE_MEMORY_MS }
+        answerAfter.entries.removeIf { now > it.value }
+        taken.entries.removeIf { now - it.value.first > HOUR_MS }
         // A phone that cannot search sees no one; it counts the phones that called it lately.
         // Only phones heard in the last few seconds: a phone that just changed its nonce would
         // otherwise count twice until its old one times out.
         val peers = if (canSearch) seen.values.count { now - it.first < SHOWN_MS } else answered.values.count { now - it < RESYNC_MS + PEER_TIMEOUT_MS }
-        if (_state.value is State.Running) _state.value = State.Running(peers, canSearch)
+        if (_state.value is State.Running) _state.value = State.Running(peers, canSearch, degraded)
     }
 
     companion object {
@@ -528,6 +673,27 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
         const val PEER_TIMEOUT_MS = 30_000L
         const val SHOWN_MS = 10_000L
         const val EXCHANGE_TIMEOUT_MS = 90_000L
+        /** Shorter for calls this phone answers: nobody has to be served for long. */
+        const val ANSWER_TIMEOUT_MS = 45_000L
+        const val ANSWER_GAP_MS = 5_000L
+        const val ANSWER_PENALTY_MS = 60_000L
+        /** Envelopes taken from one address in an hour, on top of the per-meeting limit. */
+        const val MAX_TAKEN_PER_HOUR = 300
+        const val ADDRESS_DIAL_GAP_MS = 5_000L
+        const val STRANGER_DIAL_GAP_MS = 5_000L
+        /** Distinct addresses whose calls could not connect lately before that counts against the radio. */
+        const val STUCK_ADDRESSES = 3
+        const val UNREACHABLE_MEMORY_MS = 10 * 60 * 1000L
+        const val MET_MEMORY_MS = 6 * 60 * 60 * 1000L
+        const val PRUNE_AFTER_MS = 60 * 60 * 1000L
+        const val HOUR_MS = 60 * 60 * 1000L
+        const val RESTART_BASE_MS = 5_000L
+        const val MAX_RESTART_WAIT_MS = 5 * 60 * 1000L
+        const val SCAN_START_WINDOW_MS = 30_000L
+        const val MAX_SCAN_STARTS = 5
+        const val SCAN_SETTLE_MS = 3_000L
+        /** Failed starts in a row before the screen is told. */
+        const val TROUBLE_AFTER = 3
         const val MAX_ANSWERING = 3
         const val MAX_DIALING = 3
         const val CLOSE_LINGER_MS = 500L
@@ -536,8 +702,6 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
         const val SOFT_RESET_AFTER = 10
         const val STUCK_AFTER_FAILURES = 20
         const val STUCK_AFTER_MS = 10 * 60 * 1000L
-        const val RADIO_RESTART_AFTER_MS = 30 * 60 * 1000L
-        const val RADIO_RESTART_EVERY_MS = 60 * 60 * 1000L
 
         /** Searching without the location permission came with Android 12. */
         val canSearch = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S

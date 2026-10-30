@@ -3,11 +3,15 @@ package app.pyrsos.ui
 
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
+import android.app.NotificationManager
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
+import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
@@ -43,9 +47,11 @@ import app.pyrsos.PyrsosApp
 import app.pyrsos.R
 import app.pyrsos.RelayPrefs
 import app.pyrsos.RelayService
+import app.pyrsos.data.Store
 import app.pyrsos.nearby.Nearby
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlin.system.exitProcess
 import kotlinx.coroutines.withContext
@@ -98,6 +104,13 @@ class MainActivity : ComponentActivity() {
         }
         enableEdgeToEdge()
         themeMode = ThemePrefs.load(this)
+        // Nothing here is for autofill services to see or save: not the message, not the PIN.
+        window.decorView.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        if (app.dataLost) {
+            window.isNavigationBarContrastEnforced = false
+            setContent { PyrsosTheme(themeMode) { DataLostScreen(onStartFresh = ::wipe) } }
+            return
+        }
         lifecycleScope.launch {
             hasPin = app.messenger.hasPin()
             locked = hasPin
@@ -147,12 +160,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        if (app.dataLost) return
         // With a PIN the identity is in the locked vault; that a PIN exists means it was set up.
         lifecycleScope.launch { if (app.messenger.isLocked || app.messenger.me() != null) onScreen() }
     }
 
     override fun onStop() {
         super.onStop()
+        if (app.dataLost) return
         // Leaving the screen locks: the vault closes and the PIN is asked again next time.
         if (hasPin) {
             locked = true
@@ -169,26 +184,40 @@ class MainActivity : ComponentActivity() {
         syncRelay()
     }
 
-    /** Android lets a foreground service start only while the app is on screen, so do it here. */
-    /** Deletes everything, then closes the app; the next start is a first start. */
+    /** Deletes everything, then closes the app; the next start is a first start. Every step runs even if another fails. */
     private fun wipe() {
-        RelayService.stop(this)
+        fun step(block: () -> Unit) {
+            try {
+                block()
+            } catch (e: Throwable) {
+                Log.w("Pyrsos", "wipe step failed: ${e.javaClass.simpleName}")
+            }
+        }
+        step { RelayService.stop(this) }
         app.visible = false
         app.relayRunning = false
-        app.nearby.stop()
-        lifecycleScope.launch {
-            app.messenger.wipe()
-            withContext(Dispatchers.IO) {
-                cacheDir.deleteRecursively()
-                File(applicationInfo.dataDir, "shared_prefs").list()?.forEach { deleteSharedPreferences(it.removeSuffix(".xml")) }
+        if (!app.dataLost) step { app.nearby.stop() }
+        // Not tied to the screen: the wipe must finish even if the activity goes away.
+        app.scope.launch {
+            try {
+                if (app.dataLost) step { Store.destroy(applicationContext) } else app.messenger.wipe()
+            } finally {
+                withContext(Dispatchers.IO + NonCancellable) {
+                    // The cache holds the shared APK copy too.
+                    step { cacheDir.deleteRecursively() }
+                    step { File(applicationInfo.dataDir, "shared_prefs").list()?.forEach { deleteSharedPreferences(it.removeSuffix(".xml")) } }
+                    step { getSystemService(NotificationManager::class.java).deleteNotificationChannel(RelayService.CHANNEL) }
+                }
+                // Back at the first screen, as if just installed: an app that simply vanished would
+                // tell whoever is watching that something happened.
+                step {
+                    startActivity(
+                        Intent(this@MainActivity, MainActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+                    )
+                }
+                exitProcess(0)
             }
-            // Back at the first screen, as if just installed: an app that simply vanished would
-            // tell whoever is watching that something happened.
-            startActivity(
-                Intent(this@MainActivity, MainActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
-            )
-            exitProcess(0)
         }
     }
 
@@ -210,8 +239,12 @@ class MainActivity : ComponentActivity() {
                 .putExtra(Intent.EXTRA_STREAM, uri)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             // The system's Bluetooth app: com.android.bluetooth, or a vendor's name with "bluetooth" in it.
+            // It must be a system app: any other app could name itself "bluetooth" and be handed the APK.
             val bluetooth = packageManager.queryIntentActivities(send, 0)
-                .firstOrNull { "bluetooth" in it.activityInfo.packageName }
+                .firstOrNull {
+                    "bluetooth" in it.activityInfo.packageName &&
+                        it.activityInfo.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0
+                }
             if (bluetooth == null) {
                 Toast.makeText(this@MainActivity, R.string.share_no_bluetooth, Toast.LENGTH_LONG).show()
                 return@launch
@@ -326,10 +359,14 @@ class MainActivity : ComponentActivity() {
                         hasPin = hasPin,
                         onPin = { pin ->
                             lifecycleScope.launch {
-                                if (messenger.setPin(pin)) {
-                                    hasPin = pin != null
-                                } else {
-                                    Toast.makeText(this@MainActivity, R.string.pin_is_duress, Toast.LENGTH_LONG).show()
+                                try {
+                                    if (messenger.setPin(pin)) {
+                                        hasPin = pin != null
+                                    } else {
+                                        Toast.makeText(this@MainActivity, R.string.pin_is_duress, Toast.LENGTH_LONG).show()
+                                    }
+                                } catch (_: IllegalStateException) {
+                                    // Locked in the meantime: the PIN screen is up, nothing was changed.
                                 }
                             }
                         },

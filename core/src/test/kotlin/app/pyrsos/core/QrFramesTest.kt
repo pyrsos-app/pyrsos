@@ -59,4 +59,15 @@ class QrFramesTest {
     fun plainTextPassesThrough() {
         assertEquals("https://example.org", QrFrames.Collector().add("https://example.org"))
     }
+
+    @Test
+    fun nonAsciiDigitsAreNotAFrameHeader() {
+        val text = inviteText()
+        val frame = QrFrames.split(text)[0]
+        val arabic = "PF\u0660" + frame.substring(3)
+        val c = QrFrames.Collector()
+        // Not a frame: handed back as it is, and nothing is collected.
+        assertEquals(arabic, c.add(arabic))
+        assertEquals(0, c.of)
+    }
 }

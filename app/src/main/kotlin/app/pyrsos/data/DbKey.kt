@@ -4,11 +4,15 @@ package app.pyrsos.data
 import android.content.Context
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import app.pyrsos.core.Crypto
 import java.io.File
+import java.io.FileOutputStream
 import java.security.KeyStore
+import java.security.UnrecoverableKeyException
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -23,26 +27,50 @@ internal object DbKey {
     private const val ALIAS = "pyrsos-db"
     private const val FILE = "db.key"
 
+    /** The key that opens the database is gone for good. */
     class LostException(message: String) : Exception(message)
 
-    fun load(context: Context): ByteArray {
+    /**
+     * [fresh]: no database file exists yet. Then a key without its file (or the file without its
+     * key) is what a crash during [create] leaves, and nothing is lost by starting over.
+     */
+    fun load(context: Context, fresh: Boolean): ByteArray {
         val file = File(context.noBackupFilesDir, FILE)
-        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        val wrapping = ks.getKey(ALIAS, null) as SecretKey?
-        return when {
-            wrapping != null && file.exists() -> unwrap(wrapping, file.readBytes())
-            wrapping == null && !file.exists() -> create(file)
-            // One half without the other means the data can no longer be opened. Say so; never
-            // quietly start an empty database over it.
-            wrapping == null -> throw LostException("the hardware key is gone but the wrapped database key exists")
-            else -> throw LostException("the wrapped database key file is missing")
+        // Only errors that last are a loss. Any other may pass (the keystore not ready yet): it
+        // fails this start and is tried again next time, never offered as a reason to wipe.
+        try {
+            val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            val wrapping = ks.getKey(ALIAS, null) as SecretKey?
+            return when {
+                wrapping != null && file.exists() -> unwrap(wrapping, file.readBytes())
+                wrapping == null && !file.exists() -> create(file)
+                fresh -> {
+                    file.delete()
+                    create(file)
+                }
+                // One half without the other means the data can no longer be opened. Say so; never
+                // quietly start an empty database over it.
+                wrapping == null -> throw LostException("the hardware key is gone but the wrapped database key exists")
+                else -> throw LostException("the wrapped database key file is missing")
+            }
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            throw LostException("the hardware key was invalidated")
+        } catch (e: UnrecoverableKeyException) {
+            throw LostException("the hardware key cannot be read")
+        } catch (e: AEADBadTagException) {
+            throw LostException("the hardware key does not match the database key")
         }
+
     }
 
     /** Deletes the hardware key and the wrapped database key: the database can never open again. */
     fun destroy(context: Context) {
-        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS)
-        File(context.noBackupFilesDir, FILE).delete()
+        try {
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS)
+        } finally {
+            File(context.noBackupFilesDir, FILE).delete()
+            File(context.noBackupFilesDir, "$FILE.tmp").delete()
+        }
     }
 
     private fun create(file: File): ByteArray {
@@ -51,8 +79,13 @@ internal object DbKey {
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         c.init(Cipher.ENCRYPT_MODE, wrapping)
         val out = c.iv + c.doFinal(raw)
+        // On disk for good before the database is made with the key: a crash after that would
+        // leave a database nothing can open.
         val tmp = File(file.parentFile, "$FILE.tmp")
-        tmp.writeBytes(out)
+        FileOutputStream(tmp).use {
+            it.write(out)
+            it.fd.sync()
+        }
         if (!tmp.renameTo(file)) throw IllegalStateException("could not store the database key")
         return raw
     }

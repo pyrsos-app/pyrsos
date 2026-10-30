@@ -16,7 +16,11 @@ cannot carry someone else's public key.
 People compare a short **identity code** instead of the 32-byte key: the first 60 bits of
 `SHA-256("Pyrsos v1 identity code" || identity public key)` in Crockford base 32, as three groups
 of four (`ZA0N-0J45-TEMX` for an all-zero key). It never changes while the installation keeps its
-key; a new installation gets a new code. Names are free; the code is what tells people apart.
+key; a new installation gets a new code. Names are free; the code is what tells people apart. The code is 60 bits, so finding a second key
+with the same code takes about 2^60 hashes: out of reach of a casual attacker, not of a determined
+one. It is meant for people comparing it in person, next to the signed QR codes, and is not
+lengthened because phones of different versions must show the same text. Names must be valid UTF-8
+without control characters or bidirectional formatting marks; a code with one is refused.
 
 ## Adding a contact
 
@@ -62,7 +66,7 @@ the message key expanded by HKDF into a ChaCha20-Poly1305 key and nonce. The ass
 
 B starts as the sender (initiator) with `rB` against `rA`. A, knowing `rB` from the reply, takes
 the step a first received message would cause and makes a new ratchet key at once, so either side
-may write first. At most 1000 skipped messages per step, 2000 stored skipped keys.
+may write first. At most 1000 skipped messages per step, 2000 stored skipped keys (the oldest go first).
 
 ## Envelopes
 
@@ -86,9 +90,19 @@ key(d, c) = HMAC(k(d), "key" || c)
 
 The sender uses the next counter on today's date (never an earlier day than it last used). The
 expiry day is the slot's day plus 14. The recipient expects the last 15 days and the next 2, and per
-day 16 counters past the highest seen, up to 4096 a day. Used slots are remembered so an envelope
-opens once; days that leave the window are forgotten together with their keys, once a day even
-when nothing arrives.
+day 64 counters past the highest seen, up to 4096 a day; counters more than 512 behind the highest
+seen are given up. Used slots are remembered so an envelope opens once; days that leave the window
+are forgotten together with their keys, once a day even when nothing arrives. The window moves at
+most 3 days per call and stays 3 days behind what is expected, so one reading of a wrong clock
+cannot delete the keys of a conversation that is more than a few weeks old.
+
+**Clock limits.** A sender never returns to an earlier day (day keys are a one-way chain, and a
+slot must never be used twice). A phone whose clock ran far ahead while it sent therefore stays on
+that day, and its contact, who listens only 2 days ahead, does not hear it until the real date
+reaches that day. The two phones recover when a received message turns the ratchet, which starts
+a sender on the new epoch from the clock's current day; if neither can write to the other, removing
+and adding the contact again starts afresh. A clock wrong forward while a contact is under about
+three weeks old can cost the receiver up to 3 days of its first keys.
 
 **Epochs.** The chains are replaced with every turn of the ratchet, so someone who copied a phone's
 keys stops recognising the conversation's envelopes once both sides have written again. The first
@@ -106,7 +120,7 @@ k(d)         = the seed advanced d − 18000 days    (day 18000 is 14 April 2019
 Counting from a fixed day lets both sides reach the same day key without agreeing on when the
 epoch began. The sender starts on its today; the receiver listens from 15 days back. A, whose
 ratchet already turned once in the handshake, also listens from the start on the epoch B moves to
-after its first step. A phone keeps three receiving epochs, for envelopes that arrive late or out of
+after its first step. A phone keeps five receiving epochs, for envelopes that arrive late or out of
 order.
 
 ## Between two phones

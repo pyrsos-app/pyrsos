@@ -3,8 +3,10 @@ package app.pyrsos
 
 import android.app.Application
 import android.util.Log
+import app.pyrsos.data.DbKey
 import app.pyrsos.data.Store
 import app.pyrsos.nearby.Nearby
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -25,6 +27,10 @@ class PyrsosApp : Application() {
     lateinit var messenger: Messenger
         private set
     lateinit var nearby: Nearby
+        private set
+
+    /** The hardware key of the database is gone for good: nothing is open, and the app offers a fresh start. */
+    var dataLost = false
         private set
 
     // Who wants the radio. Main thread only.
@@ -51,14 +57,22 @@ class PyrsosApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        messenger = Messenger(this, Store.outer(this))
+        // A copy of the APK left from sharing the app; it is only needed while the share runs.
+        scope.launch(Dispatchers.IO) { File(cacheDir, "share").deleteRecursively() }
+        val outer = try {
+            Store.outer(this)
+        } catch (e: DbKey.LostException) {
+            Log.e(TAG, "database key lost: ${e.message}")
+            dataLost = true
+            return
+        }
+        messenger = Messenger(this, outer)
         nearby = Nearby(this, messenger, scope)
         // Housekeeping, for as long as the process lives (the relay keeps it alive in the background).
         // A round that fails is logged and tried again next time; it must not end the loop.
-        every(HOUSEKEEPING_MS) {
-            messenger.resendUndelivered()
-            messenger.dropExpired()
-        }
+        every(HOUSEKEEPING_MS) { messenger.resendUndelivered() }
+        // Often, so messages set to disappear do so on time.
+        every(EXPIRY_MS) { messenger.dropExpired() }
         every(ACKS_MS) { messenger.sealDueAcks() }
     }
 
@@ -78,6 +92,7 @@ class PyrsosApp : Application() {
     private companion object {
         const val TAG = "Pyrsos"
         const val HOUSEKEEPING_MS = 6 * 60 * 60 * 1000L
+        const val EXPIRY_MS = 60_000L
         const val ACKS_MS = 30_000L
     }
 }

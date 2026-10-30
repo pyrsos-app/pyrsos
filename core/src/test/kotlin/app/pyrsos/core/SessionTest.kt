@@ -287,6 +287,75 @@ class SessionTest {
             fail("accepted")
         } catch (_: CryptoException) {
         }
-        assertTrue(r.expected(day).size < 100)
+        assertTrue(r.expected(day).size <= (TagReceiver.FUTURE_DAYS + 1) * TagReceiver.LOOKAHEAD)
+    }
+
+    @Test
+    fun aGapOfMoreThanSixteenLostEnvelopesIsStillHeard() {
+        val (a, b) = pair()
+        repeat(40) { a.send("lost", day) }
+        assertEquals("after the gap", text(b.receive(a.send("after the gap", day), day)))
+    }
+
+    @Test
+    fun expectedStaysBounded() {
+        val r = TagReceiver.start(Crypto.random(32), day)
+        // A fresh receiver listens from its start day only.
+        val n = TagReceiver.FUTURE_DAYS + 1
+        assertEquals(n * TagReceiver.LOOKAHEAD.toInt(), r.expected(day).size)
+        // The highest counter of a day: no slot past what consume() accepts, no unbounded gap.
+        val k = Crypto.random(32)
+        val high = r.consume(TagChain.slot(TagChain.advance(k, 0), day, TagReceiver.MAX_USED_PER_DAY.toLong()), day)
+        val offered = high.expected(day).filter { it.day == day }
+        assertTrue(offered.all { it.counter <= TagReceiver.MAX_USED_PER_DAY })
+        assertTrue(offered.size <= TagReceiver.MAX_GAP + TagReceiver.LOOKAHEAD)
+    }
+
+    @Test
+    fun aClockJumpForwardForOneReadingDoesNotEndTheConversation() {
+        val (a, b) = pair()
+        val old = a.send("from the edge of the window", day + 25)
+        val now = day + 40
+        assertEquals("hi", text(b.receive(a.send("hi", now), now)))
+        // A conversation that is a while old: the window follows the date, a few days per call.
+        repeat(8) { b.session = b.session.aged(now) }
+        // One reading of a clock decades ahead, twice, then the clock is right again.
+        b.session = b.session.aged(now + 10_000)
+        b.session = b.session.aged(now)
+        assertEquals("later", text(b.receive(a.send("later", now), now)))
+        assertEquals("from the edge of the window", text(b.receive(old, now)))
+    }
+
+    @Test
+    fun theWindowStillMovesWithTheRealDate() {
+        val r = TagReceiver.start(Crypto.random(32), day)
+        var aged = r
+        repeat(10) { aged = aged.aged(day + 30) }
+        assertEquals(day + 30 - TagReceiver.KEEP_DAYS - TagReceiver.AGE_GRACE, aged.baseDay)
+    }
+
+    @Test
+    fun manyPingPongsKeepAnEnvelopeInFlight() {
+        val (a, b) = pair()
+        assertEquals("1", text(b.receive(a.send("1", day), day)))
+        assertEquals("2", text(a.receive(b.send("2", day), day)))
+        val late = a.send("late", day)
+        // Four more turns of the ratchet while it travels.
+        repeat(4) { i ->
+            assertEquals("a$i", text(b.receive(a.send("a$i", day), day)))
+            assertEquals("b$i", text(a.receive(b.send("b$i", day), day)))
+        }
+        assertEquals("late", text(b.receive(late, day)))
+    }
+
+    @Test
+    fun aSenderStuckOnAFutureDayIsNotHeardUntilTheDateArrives() {
+        // The limit PROTOCOL.md documents: a sender never goes back to an earlier day.
+        val (a, b) = pair()
+        val far = a.send("far", day + 400)
+        val back = a.send("back", day)
+        assertNull(b.receive(back, day))
+        assertNull(b.receive(far, day))
+        assertEquals("far", text(b.receive(far, day + 400)))
     }
 }

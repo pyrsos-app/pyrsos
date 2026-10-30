@@ -56,6 +56,11 @@ class RelayService : Service() {
             stopSelf()
             return
         }
+        // Started (so Android is satisfied), but there is nothing to relay with.
+        if (app.dataLost) {
+            stopSelf()
+            return
+        }
         ContextCompat.registerReceiver(
             this,
             battery,
@@ -79,7 +84,7 @@ class RelayService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onDestroy() {
-        if (app.relayRunning) {
+        if (!app.dataLost && app.relayRunning) {
             unregisterReceiver(battery)
             app.relayRunning = false
             app.updateRadio()
@@ -119,12 +124,21 @@ class RelayService : Service() {
 
     companion object {
         private const val TAG = "Pyrsos"
-        private const val CHANNEL = "relay"
+        const val CHANNEL = "relay"
         private const val NOTICE_ID = 1
         private const val LOW_BATTERY_PERCENT = 15
 
-        /** Starts the relay; only call while the app is on screen (Android refuses otherwise). */
+        /**
+         * Starts the relay; only call while the app is on screen (Android refuses otherwise). Not
+         * without the Bluetooth permissions: the service could not enter the foreground then, and
+         * Android crashes an app whose foreground service does not.
+         */
         fun start(context: Context) {
+            val app = context.applicationContext as PyrsosApp
+            if (app.dataLost || !app.nearby.hasPermissions()) {
+                stop(context)
+                return
+            }
             try {
                 ContextCompat.startForegroundService(context, Intent(context, RelayService::class.java))
             } catch (e: Exception) {

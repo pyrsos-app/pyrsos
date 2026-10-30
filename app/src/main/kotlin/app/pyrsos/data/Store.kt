@@ -125,7 +125,11 @@ class Store private constructor(file: File, key: ByteArray, migrations: List<Lis
         /** What the vault holds; the outer database has the same tables, used when there is no PIN. */
         val VAULT_TABLES = listOf("identity", "contacts", "pending_invites", "messages", "pending_acks")
 
-        fun outer(context: Context) = Store(File(context.noBackupFilesDir, FILE), DbKey.load(context), OUTER)
+        /** Throws [DbKey.LostException] if the key that opens the database is gone for good. */
+        fun outer(context: Context): Store {
+            val file = File(context.noBackupFilesDir, FILE)
+            return Store(file, DbKey.load(context, fresh = file.length() == 0L), OUTER)
+        }
 
         /** Opens (or creates) the vault with [key], which is zeroed after. */
         fun vault(context: Context, key: ByteArray) = Store(File(context.noBackupFilesDir, VAULT_FILE), key, VAULT)

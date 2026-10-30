@@ -22,12 +22,12 @@
     <string name="status_unsupported">This phone cannot open Bluetooth channels to other phones</string>
 
     <string name="add_title">Add contact</string>
-    <string name="add_intro">You must be together. One of you shows a code and the other scans it, then the other way round.</string>
+    <string name="add_intro">You must be together. Only one of you taps “Show my code”; the other taps “Scan their code”. Then the one who showed the code scans the answer that appears on the other phone.</string>
     <string name="add_show">Show my code</string>
     <string name="add_scan">Scan their code</string>
     <string name="add_show_steps">1. Let them scan this code.\n2. Then tap below and scan the code they show you.</string>
     <string name="add_scan_reply">Scan their answer</string>
-    <string name="add_reply_steps">Now let them scan this code to finish.</string>
+    <string name="add_reply_steps">Now let them scan this code with “Scan their answer”. Until they do, you are not connected.</string>
     <string name="add_done">Done</string>
     <string name="add_scan_prompt">Point the camera at the code on their screen</string>
 
@@ -38,7 +38,7 @@
     <string name="err_own">This is your own code.</string>
     <string name="err_camera">The camera is needed to scan codes.</string>
 
-    <string name="chat_not_finished">%s has not finished adding you. What you write reaches them only after they scan your answer code.</string>
+    <string name="chat_not_finished">%s has not finished adding you. If they scanned your answer code, this clears the next time your phones are near each other with Bluetooth on. If they did not, add each other again.</string>
     <string name="chat_hint">Message</string>
     <string name="chat_send">Send</string>
     <string name="chat_counter">%1$d / %2$d</string>
@@ -68,6 +68,7 @@
     <string name="settings_code">Your identity code</string>
     <string name="settings_code_note">It never changes and cannot be copied. When you add someone, check that each phone shows the other\'s code.</string>
     <string name="err_stale_invite">This code is old, or the two phones show different dates. Check the date on both phones and make a new code.</string>
+    <string name="err_both_showing">You both showed your codes. Keep yours on screen: they scan it, then you scan the answer on their phone.</string>
     <string name="err_already_contact">This person is already one of your contacts. To add them again, remove them first from the chat menu.</string>
     <string name="err_forged">This code carries someone else\'s identity. Do not add this person.</string>
     <string name="add_scan_progress">Parts read: %1$d of %2$d</string>
@@ -94,7 +95,7 @@
     <string name="pin_set">Set PIN</string>
     <string name="pin_change">Change PIN</string>
     <string name="pin_remove">Remove PIN</string>
-    <string name="pin_new">New PIN (4 to 8 digits)</string>
+    <string name="pin_new">New PIN (4 to 16 digits)</string>
     <string name="pin_again">PIN again</string>
     <string name="pin_mismatch">The two PINs differ.</string>
     <string name="pin_enter">PIN</string>
@@ -154,4 +155,9 @@
     <string name="welcome_open">Pyrsos carries messages even while closed, but it shows no notifications for new ones: open it to see if you have any.</string>
     <string name="welcome_pin">For extra security, set a PIN. Your messages are then locked, and someone who takes your phone cannot read them.</string>
     <string name="licences_title">Open source licences</string>
+    <string name="pin_key_lost">The key that opens your data is gone. It can no longer be opened.</string>
+    <string name="lost_title">Data cannot be opened</string>
+    <string name="lost_note">The data on this phone can no longer be opened: the key that guarded it is gone, as after a reset or a restore. Start fresh to use Pyrsos again.</string>
+    <string name="lost_action">Start fresh</string>
+    <string name="lost_confirm">The old data is deleted for good and Pyrsos starts over with a new identity code. It cannot be opened anyway.</string>
 </resources>

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package app.pyrsos.core
 
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 import kotlin.math.abs
 
 /**
@@ -242,6 +245,22 @@ object Handshake {
 
     private fun parseName(b: ByteArray): String {
         if (b.size !in 1..MAX_NAME_BYTES) throw MalformedException("name length")
-        return b.toString(Charsets.UTF_8)
+        // Strict: malformed UTF-8 is refused, not repaired. Control and bidi-format characters
+        // could reorder or hide text around the name; the app strips the same ones from names it makes.
+        val name = try {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(b)).toString()
+        } catch (e: CharacterCodingException) {
+            throw MalformedException("name is not UTF-8")
+        }
+        if (name.any { isHiddenChar(it) }) throw MalformedException("name has control characters")
+        return name
     }
+
+    private fun isHiddenChar(c: Char): Boolean =
+        Character.getType(c) == Character.CONTROL.toInt() ||
+            c == '\u061C' || c in '\u200E'..'\u200F' || c in '\u202A'..'\u202E' || c in '\u2066'..'\u2069' ||
+            c == '\u2028' || c == '\u2029'
 }
