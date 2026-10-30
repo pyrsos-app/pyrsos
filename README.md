@@ -140,7 +140,11 @@ app is in `app/`; the logo and lettering are in `brand/`.
 
 Pyrsos needs more hands. If you know Kotlin (or Android, Bluetooth LE or cryptography) and want to
 help, you are very welcome: open an issue to say what you would like to work on, or send a pull
-request. Testing on more phones helps too, especially older and cheaper ones.
+request. Testing on more phones helps too, especially older and cheaper ones, and so do
+translations into other languages.
+
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to report a bug, how to build and test, and what a pull
+request needs.
 
 ## Reporting a security problem
 
