@@ -106,8 +106,16 @@ object Crypto {
 
     fun mlKemEncapsulate(public: ByteArray): Encapsulation {
         if (public.size != ML_KEM_PUBLIC) throw CryptoException("ml-kem public key size ${public.size}")
-        val result = MLKEMGenerator(rng)
-            .generateEncapsulated(MLKEMPublicKeyParameters(MLKEMParameters.ml_kem_768, public))
+        // Bouncy Castle checks the key itself and throws its own exceptions; a code from someone
+        // else must be refused, never crash the app.
+        val result = try {
+            MLKEMGenerator(rng)
+                .generateEncapsulated(MLKEMPublicKeyParameters(MLKEMParameters.ml_kem_768, public))
+        } catch (e: IllegalArgumentException) {
+            throw MalformedException("ml-kem public key: ${e.message}")
+        } catch (e: IllegalStateException) {
+            throw MalformedException("ml-kem public key: ${e.message}")
+        }
         return Encapsulation(result.secret, result.encapsulation)
     }
 

@@ -21,12 +21,12 @@
     <string name="status_unsupported">Αυτό το κινητό δεν μπορεί να ανοίξει κανάλια Bluetooth προς άλλα κινητά</string>
 
     <string name="add_title">Προσθήκη επαφής</string>
-    <string name="add_intro">Πρέπει να είστε μαζί. Ο ένας δείχνει έναν κωδικό και ο άλλος τον σκανάρει, και μετά ανάποδα.</string>
+    <string name="add_intro">Πρέπει να είστε μαζί. Μόνο ο ένας πατάει «Δείξε τον κωδικό μου» και ο άλλος «Σκανάρισε τον κωδικό του». Μετά, αυτός που έδειξε τον κωδικό σκανάρει την απάντηση που εμφανίζεται στο άλλο κινητό.</string>
     <string name="add_show">Δείξε τον κωδικό μου</string>
     <string name="add_scan">Σκανάρισε τον κωδικό του</string>
     <string name="add_show_steps">1. Άφησέ τον να σκανάρει αυτόν τον κωδικό.\n2. Μετά πάτα από κάτω και σκανάρισε τον κωδικό που σου δείχνει.</string>
     <string name="add_scan_reply">Σκανάρισε την απάντησή του</string>
-    <string name="add_reply_steps">Τώρα άφησέ τον να σκανάρει αυτόν τον κωδικό για να τελειώσει.</string>
+    <string name="add_reply_steps">Τώρα άφησέ τον να σκανάρει αυτόν τον κωδικό με «Σκανάρισε την απάντησή του». Μέχρι να το κάνει, δεν έχετε συνδεθεί.</string>
     <string name="add_done">Τέλος</string>
     <string name="add_scan_prompt">Στρέψε την κάμερα στον κωδικό της οθόνης του</string>
 
@@ -37,7 +37,7 @@
     <string name="err_own">Αυτός είναι ο δικός σου κωδικός.</string>
     <string name="err_camera">Χρειάζεται η κάμερα για να σκανάρεις κωδικούς.</string>
 
-    <string name="chat_not_finished">Ο/Η %s δεν έχει ολοκληρώσει την προσθήκη σου. Ό,τι γράψεις θα του φτάσει μόνο αφού σκανάρει τον κωδικό απάντησής σου.</string>
+    <string name="chat_not_finished">Ο/Η %s δεν έχει ολοκληρώσει την προσθήκη σου. Αν σκάναρε τον κωδικό απάντησής σου, αυτό θα φύγει την επόμενη φορά που τα κινητά σας θα είναι κοντά με ανοιχτό το Bluetooth. Αν όχι, προσθέστε ο ένας τον άλλον ξανά.</string>
     <string name="chat_hint">Μήνυμα</string>
     <string name="chat_send">Αποστολή</string>
     <string name="chat_counter">%1$d / %2$d</string>
@@ -67,6 +67,7 @@
     <string name="settings_code">Ο κωδικός ταυτότητάς σου</string>
     <string name="settings_code_note">Δεν αλλάζει και δεν αντιγράφεται. Όταν προσθέτεις κάποιον, ελέγξτε ότι το κάθε κινητό δείχνει τον κωδικό του άλλου.</string>
     <string name="err_stale_invite">Ο κωδικός είναι παλιός, ή τα δύο κινητά δείχνουν διαφορετική ημερομηνία. Έλεγξε την ημερομηνία και στα δύο και φτιάξε νέο κωδικό.</string>
+    <string name="err_both_showing">Δείξατε και οι δύο τους κωδικούς σας. Κράτα τον δικό σου στην οθόνη: εκείνος τον σκανάρει και μετά εσύ σκανάρεις την απάντηση στο κινητό του.</string>
     <string name="err_already_contact">Αυτό το άτομο είναι ήδη στις επαφές σου. Για να το προσθέσεις ξανά, αφαίρεσέ το πρώτα από το μενού της συνομιλίας.</string>
     <string name="err_forged">Αυτός ο κωδικός έχει την ταυτότητα κάποιου άλλου. Μην προσθέσεις αυτό το άτομο.</string>
     <string name="add_scan_progress">Κομμάτια: %1$d από %2$d</string>
@@ -93,7 +94,7 @@
     <string name="pin_set">Ορισμός PIN</string>
     <string name="pin_change">Αλλαγή PIN</string>
     <string name="pin_remove">Αφαίρεση PIN</string>
-    <string name="pin_new">Νέο PIN (4 έως 8 ψηφία)</string>
+    <string name="pin_new">Νέο PIN (4 έως 16 ψηφία)</string>
     <string name="pin_again">Ξανά το PIN</string>
     <string name="pin_mismatch">Τα δύο PIN διαφέρουν.</string>
     <string name="pin_enter">PIN</string>
@@ -153,4 +154,9 @@
     <string name="welcome_open">Ο Pyrsos μεταφέρει μηνύματα και όταν είναι κλειστός, αλλά δεν σου δείχνει ειδοποιήσεις για νέα μηνύματα: άνοιξέ τον για να δεις αν έχεις.</string>
     <string name="welcome_pin">Για επιπλέον ασφάλεια, βάλε PIN. Τότε τα μηνύματά σου κλειδώνονται και δεν τα διαβάζει όποιος πάρει το κινητό σου.</string>
     <string name="licences_title">Άδειες ανοιχτού κώδικα</string>
+    <string name="pin_key_lost">Το κλειδί που ανοίγει τα δεδομένα σου χάθηκε. Δεν ανοίγουν πια.</string>
+    <string name="lost_title">Τα δεδομένα δεν ανοίγουν</string>
+    <string name="lost_note">Τα δεδομένα σε αυτό το κινητό δεν ανοίγουν πια: το κλειδί που τα φύλαγε χάθηκε, όπως μετά από επαναφορά. Ξεκίνα από την αρχή για να χρησιμοποιήσεις ξανά τον Pyrsos.</string>
+    <string name="lost_action">Νέα αρχή</string>
+    <string name="lost_confirm">Τα παλιά δεδομένα διαγράφονται οριστικά και ο Pyrsos ξεκινά με νέο κωδικό ταυτότητας. Έτσι κι αλλιώς δεν ανοίγουν.</string>
 </resources>

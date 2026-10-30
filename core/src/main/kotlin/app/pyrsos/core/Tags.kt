@@ -56,7 +56,12 @@ internal object TagChain {
 class TagSender(private val dayKey: ByteArray, private val day: Int, private val counter: Long) {
     class Next(val next: TagSender, val slot: TagSlot)
 
-    /** A clock that went backwards keeps the last day used, so no slot is ever used twice. */
+    /**
+     * A clock that went backwards keeps the last day used, so no slot is ever used twice. The
+     * same holds for a clock that jumped far ahead: the sender stays on that day (day keys are a
+     * one-way chain, it cannot return), and the recipient listens only [TagReceiver.FUTURE_DAYS]
+     * ahead, so the contact is unheard until the real date reaches that day. See PROTOCOL.md.
+     */
     fun next(today: Int): Next {
         val d = maxOf(today, day)
         val k = TagChain.advance(dayKey, d - day)
@@ -92,7 +97,8 @@ class TagReceiver private constructor(
     /**
      * Every slot this direction may arrive on today: the last [KEEP_DAYS] days, the next
      * [FUTURE_DAYS] days for a sender whose clock runs ahead, and per day [LOOKAHEAD] counters
-     * past the highest seen.
+     * past the highest seen. Counters more than [MAX_GAP] behind the highest seen are given up,
+     * and none passes [MAX_USED_PER_DAY]: a day offers at most [MAX_GAP] + [LOOKAHEAD] slots.
      */
     fun expected(today: Int): List<TagSlot> {
         val from = maxOf(baseDay, today - KEEP_DAYS)
@@ -102,9 +108,11 @@ class TagReceiver private constructor(
         val out = ArrayList<TagSlot>()
         for (d in from..to) {
             val st = days[d]
-            // Capped: a contact must not be able to make this list grow without end.
-            val upTo = minOf((st?.maxSeen ?: -1L) + LOOKAHEAD, MAX_USED_PER_DAY + LOOKAHEAD)
-            for (c in 0..upTo) {
+            val seen = st?.maxSeen ?: -1L
+            // Capped: a contact must not be able to make this list grow without end, and consume()
+            // refuses counters past MAX_USED_PER_DAY after decrypting.
+            val upTo = minOf(seen + LOOKAHEAD, MAX_USED_PER_DAY.toLong())
+            for (c in maxOf(0L, seen + 1 - MAX_GAP)..upTo) {
                 if (st != null && c in st.used) continue
                 out += TagChain.slot(k, d, c)
             }
@@ -113,7 +121,11 @@ class TagReceiver private constructor(
         return out
     }
 
-    /** Records that [slot] was used, and forgets every day that left the window. */
+    /**
+     * Records that [slot] was used. Does not age the window: [today] is one reading of a clock
+     * that may be wrong, and a burst of envelopes would repeat it; [aged] does that once a day.
+     */
+    @Suppress("UNUSED_PARAMETER")
     fun consume(slot: TagSlot, today: Int): TagReceiver {
         val st = days[slot.day]
         if (st != null && slot.counter in st.used) throw CryptoException("tag slot already used")
@@ -121,11 +133,16 @@ class TagReceiver private constructor(
         if (slot.counter > MAX_USED_PER_DAY) throw CryptoException("counter out of range")
         val nextDays = HashMap(days)
         nextDays[slot.day] = DayState(maxOf(st?.maxSeen ?: -1L, slot.counter), (st?.used ?: emptySet()) + slot.counter)
-        return TagReceiver(baseKey, baseDay, nextDays).forgetBefore(today - KEEP_DAYS)
+        return TagReceiver(baseKey, baseDay, nextDays)
     }
 
-    /** Moves the window to [today] even when nothing arrived: old day keys are then gone. */
-    fun aged(today: Int): TagReceiver = forgetBefore(today - KEEP_DAYS)
+    /**
+     * Moves the window towards [today] even when nothing arrived: old day keys are then gone. One
+     * reading of a wrong clock must not delete the keys of a whole conversation, so the window
+     * moves at most [MAX_AGE_STEP] days per call and stays [AGE_GRACE] days behind what
+     * [expected] offers; a clock set right again finds its days still there.
+     */
+    fun aged(today: Int): TagReceiver = forgetBefore(minOf(today - KEEP_DAYS - AGE_GRACE, baseDay + MAX_AGE_STEP))
 
     private fun forgetBefore(day: Int): TagReceiver {
         if (day <= baseDay) return this
@@ -144,7 +161,14 @@ class TagReceiver private constructor(
     companion object {
         const val KEEP_DAYS = 15
         const val FUTURE_DAYS = 2
-        const val LOOKAHEAD = 16L
+        const val LOOKAHEAD = 64L
+
+        /** Skipped counters this far behind the highest seen are no longer listened for. */
+        const val MAX_GAP = 512L
+
+        /** Most days [aged] moves the window in one call, and how far behind the offered window it stays. */
+        const val MAX_AGE_STEP = 3
+        const val AGE_GRACE = 3
         const val MAX_USED_PER_DAY = 4096
 
         fun start(seed: ByteArray, today: Int) = TagReceiver(seed, today, emptyMap())

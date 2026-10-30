@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.FilterInputStream
 import java.io.InputStream
 import java.io.OutputStream
 
@@ -40,13 +41,40 @@ import java.io.OutputStream
  * received are kept as they arrive, in batches, so a channel that breaks halfway loses nothing
  * that came through.
  */
-internal class Sync(input: InputStream, output: OutputStream, private val close: () -> Unit) {
-    private val inp = DataInputStream(input.buffered())
+internal class Sync(
+    input: InputStream,
+    output: OutputStream,
+    /** The most envelopes this meeting may take, on top of [MAX_ACCEPT]: a per-peer allowance. */
+    private val maxAccept: Int = Int.MAX_VALUE,
+    /** Also cut off a peer that sends too slowly to be worth a channel; for phones that called us. */
+    private val strict: Boolean = false,
+    private val close: () -> Unit,
+) {
+    private val inp = DataInputStream(Counting(input).buffered())
     private val out = DataOutputStream(output.buffered())
 
-    /** When a frame last came in or went out, and whether the other phone has said HELLO yet. */
-    @Volatile private var lastActivity = SystemClock.elapsedRealtime()
+    /** When a byte last came in, when a frame last went out, and whether HELLO has come yet. */
+    @Volatile private var lastIn = SystemClock.elapsedRealtime()
+    @Volatile private var lastOut = lastIn
+    @Volatile private var inBytes = 0L
     @Volatile private var greeted = false
+
+    /** True while envelopes are still due from the other phone, in numbers worth a rate check. */
+    @Volatile private var expecting = false
+
+    /** Envelopes taken so far, also when the meeting ends badly. */
+    @Volatile var taken = 0
+        private set
+
+    /** Counts bytes as they arrive, so a peer is quiet only if no byte at all came in. */
+    private inner class Counting(input: InputStream) : FilterInputStream(input) {
+        override fun read(): Int = super.read().also { if (it >= 0) arrived(1) }
+        override fun read(b: ByteArray, off: Int, len: Int): Int = super.read(b, off, len).also { if (it > 0) arrived(it) }
+        private fun arrived(n: Int) {
+            inBytes += n
+            lastIn = SystemClock.elapsedRealtime()
+        }
+    }
 
     class Result(val peerNonce: Int, val received: Int, val sent: Int, val opened: Int)
 
@@ -58,17 +86,32 @@ internal class Sync(input: InputStream, output: OutputStream, private val close:
         // A phone that connects and then says nothing, or stops halfway, would hold this phone's
         // channel until the overall deadline. Closing the socket is what ends a blocking read.
         val watchdog = launch {
+            var windowStart = SystemClock.elapsedRealtime()
+            var windowBytes = inBytes
             while (true) {
                 delay(WATCH_STEP_MS)
-                val quiet = SystemClock.elapsedRealtime() - lastActivity
+                val now = SystemClock.elapsedRealtime()
+                // Before HELLO only the other's silence counts; later our own sending also shows life.
+                val quiet = now - if (greeted) maxOf(lastIn, lastOut) else lastIn
                 if (quiet > if (greeted) FRAME_WAIT_MS else HELLO_WAIT_MS) {
                     close()
                     throw MalformedException("the other phone went quiet")
                 }
+                // A trickle of frames, each just in time, would hold the channel for the whole deadline.
+                if (!strict || !expecting) {
+                    windowStart = now
+                    windowBytes = inBytes
+                } else if (now - windowStart >= PROGRESS_WINDOW_MS) {
+                    if (inBytes - windowBytes < MIN_PROGRESS_BYTES) {
+                        close()
+                        throw MalformedException("the other phone sends too slowly")
+                    }
+                    windowStart = now
+                    windowBytes = inBytes
+                }
             }
         }
-        val inventory = messenger.inventory()
-        val have = inventory.mapTo(HashSet()) { it.toHex() }
+        val have = HashSet<String>()
         val theirInventory = CompletableDeferred<List<ByteArray>>()
         val theirWant = CompletableDeferred<List<ByteArray>>()
         val theirsDone = CompletableDeferred<Unit>()
@@ -83,6 +126,7 @@ internal class Sync(input: InputStream, output: OutputStream, private val close:
             theirInventory.complete(ids(expect(INV)))
             theirWant.complete(ids(expect(WANT)))
             val wanted = asked.await()
+            expecting = wanted.size >= MIN_PROGRESS_ENVELOPES
             val batch = ArrayList<ByteArray>()
             var received = 0
             var opened = 0
@@ -95,6 +139,8 @@ internal class Sync(input: InputStream, output: OutputStream, private val close:
                             if (!wanted.remove(Envelope.parse(body).id.toHex())) throw MalformedException("unrequested envelope")
                             batch += body
                             received++
+                            taken = received
+                            expecting = wanted.size >= MIN_PROGRESS_ENVELOPES
                             if (batch.size >= INGEST_BATCH) {
                                 opened += messenger.ingest(batch.toList()).opened
                                 batch.clear()
@@ -105,6 +151,7 @@ internal class Sync(input: InputStream, output: OutputStream, private val close:
                     }
                 }
             } finally {
+                expecting = false
                 if (batch.isNotEmpty()) withContext(NonCancellable) { opened += messenger.ingest(batch.toList()).opened }
             }
             theirsDone.complete(Unit)
@@ -112,10 +159,16 @@ internal class Sync(input: InputStream, output: OutputStream, private val close:
         }
 
         val writer = async(Dispatchers.IO) {
+            // HELLO leaves before the inventory is read from storage: the other phone's wait for it
+            // must not be spent on a slow database.
             send(HELLO, ByteWriter().raw(MAGIC).u8(VERSION).u32(ownNonce.toLong() and 0xffffffffL).bytes())
+            out.flush()
+            val inventory = messenger.inventory()
+            have.addAll(inventory.map { it.toHex() })
             send(INV, idsBody(inventory))
             out.flush()
-            val want = theirInventory.await().distinctBy { it.toHex() }.filter { it.toHex() !in have }.take(MAX_ACCEPT)
+            val want = theirInventory.await().distinctBy { it.toHex() }.filter { it.toHex() !in have }
+                .take(minOf(MAX_ACCEPT, maxAccept))
             asked.complete(want.mapTo(HashSet()) { it.toHex() })
             send(WANT, idsBody(want))
             out.flush()
@@ -151,17 +204,14 @@ internal class Sync(input: InputStream, output: OutputStream, private val close:
         out.writeByte(type)
         out.writeInt(body.size)
         out.write(body)
-        lastActivity = SystemClock.elapsedRealtime()
+        lastOut = SystemClock.elapsedRealtime()
     }
 
     private fun frame(): Pair<Int, ByteArray> {
         val type = inp.readUnsignedByte()
         val len = inp.readInt()
         if (len < 0 || len > MAX_FRAME) throw MalformedException("frame length $len")
-        return type to ByteArray(len).also {
-            inp.readFully(it)
-            lastActivity = SystemClock.elapsedRealtime()
-        }
+        return type to ByteArray(len).also { inp.readFully(it) }
     }
 
     private fun expect(type: Int): ByteArray {
@@ -209,5 +259,10 @@ internal class Sync(input: InputStream, output: OutputStream, private val close:
         const val HELLO_WAIT_MS = 5_000L
         const val FRAME_WAIT_MS = 10_000L
         const val WATCH_STEP_MS = 1_000L
+
+        /** A caller sending [MIN_PROGRESS_ENVELOPES] or more must deliver this much in each window. */
+        const val PROGRESS_WINDOW_MS = 15_000L
+        const val MIN_PROGRESS_BYTES = 4_096L
+        const val MIN_PROGRESS_ENVELOPES = 4
     }
 }

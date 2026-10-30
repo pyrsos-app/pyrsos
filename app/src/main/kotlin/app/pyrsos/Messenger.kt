@@ -105,7 +105,7 @@ class Messenger(private val context: Context, private val outer: Store) {
 
         class Refused(val reason: Reason) : ScanResult()
 
-        enum class Reason { NOT_PYRSOS, OTHER_VERSION, OWN_CODE, FORGED, REPLY_WITHOUT_INVITE, REPLY_DOES_NOT_MATCH, STALE_INVITE, ALREADY_CONTACT }
+        enum class Reason { NOT_PYRSOS, OTHER_VERSION, OWN_CODE, FORGED, REPLY_WITHOUT_INVITE, REPLY_DOES_NOT_MATCH, STALE_INVITE, ALREADY_CONTACT, BOTH_SHOWING }
     }
 
     private suspend fun <T> io(block: () -> T): T = withContext(worker) { block() }
@@ -183,12 +183,14 @@ class Messenger(private val context: Context, private val outer: Store) {
 
     /** Deletes the conversation on this phone; the contact stays. */
     suspend fun clearChat(contactId: String) = io {
+        if (isLocked) throw LockedException()
         data.exec("DELETE FROM messages WHERE contact_id = ?", contactId)
         changed()
     }
 
     /** Deletes the contact, its keys and the conversation on this phone. */
     suspend fun removeContact(contactId: String) = io {
+        if (isLocked) throw LockedException()
         data.tx {
             data.exec("DELETE FROM messages WHERE contact_id = ?", contactId)
             data.exec("DELETE FROM pending_acks WHERE contact_id = ?", contactId)
@@ -200,11 +202,21 @@ class Messenger(private val context: Context, private val outer: Store) {
 
     /** Closes and destroys both databases and their keys ([Store.destroy]). The app must exit after. */
     suspend fun wipe() = io {
-        vault?.close()
+        // Every step runs even if one fails; the first failure is thrown at the end.
+        var failure: Throwable? = null
+        fun step(block: () -> Unit) {
+            try {
+                block()
+            } catch (e: Throwable) {
+                if (failure == null) failure = e
+            }
+        }
+        step { vault?.close() }
         vault = null
-        vaultKey?.fill(0)
-        outer.close()
-        Store.destroy(context)
+        step { vaultKey?.fill(0) }
+        step { outer.close() }
+        step { Store.destroy(context) }
+        failure?.let { throw it }
     }
 
     // Test data (debug builds only) ---------------------------------------------------------------
@@ -264,6 +276,8 @@ class Messenger(private val context: Context, private val outer: Store) {
         object Wipe : PinCheck()
         /** The phone's own screen is locked, so the hardware secret cannot be used. */
         object PhoneLocked : PinCheck()
+        /** The hardware key is gone for good (reset, new screen lock, restored files): the vault cannot open again. */
+        object KeyLost : PinCheck()
     }
 
     init {
@@ -281,6 +295,7 @@ class Messenger(private val context: Context, private val outer: Store) {
      * Refused (false) if [pin] is the duress PIN, which would then open nothing but delete all.
      */
     suspend fun setPin(pin: String?): Boolean = io {
+        if (isLocked) throw LockedException()
         when {
             pin != null && vault == null && !vaultMode -> createVault(pin)
             pin != null -> {
@@ -288,6 +303,8 @@ class Messenger(private val context: Context, private val outer: Store) {
                 rewrapVault(pin)
             }
             vault != null -> removeVault()
+            // No PIN and none to remove: nothing changed, so the wrong-PIN counters stay.
+            else -> return@io true
         }
         outer.exec("DELETE FROM settings WHERE k IN (?, ?, ?)", PIN_FAILURES, PIN_WAIT, OLD_PIN_WAIT)
         changed()
@@ -452,6 +469,9 @@ class Messenger(private val context: Context, private val outer: Store) {
         setting(OLD_PIN)?.let { return@io unlockOld(pin, it) }
         val hw = try {
             VaultKey.unwrap(setting(VAULT_HW)!!)
+        } catch (e: VaultKey.LostException) {
+            Log.w(TAG, "vault hardware key lost: ${e.message}")
+            return@io PinCheck.KeyLost
         } catch (e: Exception) {
             Log.w(TAG, "vault hardware secret unavailable: ${e.javaClass.simpleName}")
             return@io PinCheck.PhoneLocked
@@ -501,7 +521,7 @@ class Messenger(private val context: Context, private val outer: Store) {
     }
 
     private fun wrongPin(traps: Int): PinCheck {
-        val failures = (setting(PIN_FAILURES)?.decodeToString()?.toInt() ?: 0) + 1
+        val failures = (setting(PIN_FAILURES)?.decodeToString()?.toIntOrNull() ?: 0) + 1
         putSetting(PIN_FAILURES, failures.toString().encodeToByteArray())
         if (traps and TRAP_WIPE != 0 && failures >= WIPE_AFTER_TRIES) return PinCheck.Wipe
         if (failures >= PIN_FREE_TRIES) {
@@ -519,8 +539,14 @@ class Messenger(private val context: Context, private val outer: Store) {
      */
     private fun waitLeft(): Long {
         val parts = setting(PIN_WAIT)?.decodeToString()?.split(':') ?: return 0
-        val (boot, until, length) = parts.map { it.toLong() }
+        val nums = parts.mapNotNull { it.toLongOrNull() }
         val now = SystemClock.elapsedRealtime()
+        if (nums.size != 3 || parts.size != 3) {
+            // Unreadable: start a fresh wait rather than none.
+            putSetting(PIN_WAIT, "${bootCount()}:${now + PIN_FIRST_WAIT_MS}:$PIN_FIRST_WAIT_MS".encodeToByteArray())
+            return PIN_FIRST_WAIT_MS
+        }
+        val (boot, until, length) = nums
         if (boot != bootCount().toLong()) {
             putSetting(PIN_WAIT, "${bootCount()}:${now + length}:$length".encodeToByteArray())
             return length
@@ -586,12 +612,15 @@ class Messenger(private val context: Context, private val outer: Store) {
         changed()
     }
 
-    suspend fun autoDeleteDays(): Int = io { setting(AUTO_DELETE)?.decodeToString()?.toInt() ?: 0 }
+    suspend fun autoDeleteDays(): Int = io { setting(AUTO_DELETE)?.decodeToString()?.toIntOrNull() ?: 0 }
 
     /** Deletes this phone's messages older than the chosen age. Only while the data is open. */
-    private fun deleteOldMessages() {
-        val days = setting(AUTO_DELETE)?.decodeToString()?.toInt() ?: return
-        data.exec("DELETE FROM messages WHERE at < ?", System.currentTimeMillis() - days * 86_400_000L)
+    private fun deleteOldMessages(): Boolean {
+        val days = setting(AUTO_DELETE)?.decodeToString()?.toIntOrNull() ?: return false
+        val cutoff = System.currentTimeMillis() - days * 86_400_000L
+        if (data.query("SELECT 1 FROM messages WHERE at < ? LIMIT 1", cutoff) { 1 }.isEmpty()) return false
+        data.exec("DELETE FROM messages WHERE at < ?", cutoff)
+        return true
     }
 
     private fun setting(k: String): ByteArray? =
@@ -617,7 +646,8 @@ class Messenger(private val context: Context, private val outer: Store) {
 
     suspend fun cancelInvite() = io { data.exec("DELETE FROM pending_invites") }
 
-    suspend fun scanned(code: String): ScanResult = io {
+    /** [showing]: this phone is showing its own invitation while it scans. */
+    suspend fun scanned(code: String, showing: Boolean = false): ScanResult = io {
         val bytes = try {
             Base45.decode(code.trim())
         } catch (_: MalformedException) {
@@ -626,12 +656,12 @@ class Messenger(private val context: Context, private val outer: Store) {
         when (Handshake.kindOf(bytes)) {
             Handshake.Kind.NOT_PYRSOS -> ScanResult.Refused(ScanResult.Reason.NOT_PYRSOS)
             Handshake.Kind.UNSUPPORTED_VERSION -> ScanResult.Refused(ScanResult.Reason.OTHER_VERSION)
-            Handshake.Kind.INVITE -> answerInvite(bytes)
+            Handshake.Kind.INVITE -> answerInvite(bytes, showing)
             Handshake.Kind.REPLY -> completeInvite(bytes)
         }
     }
 
-    private fun answerInvite(invite: ByteArray): ScanResult {
+    private fun answerInvite(invite: ByteArray, showing: Boolean): ScanResult {
         val (identity, name) = identity()
         val (reply, est) = try {
             Handshake.reply(identity, name, invite, today())
@@ -646,6 +676,12 @@ class Messenger(private val context: Context, private val outer: Store) {
         }
         val id = contactId(est.peerIdentity)
         if (isConfirmedContact(id)) return ScanResult.Refused(ScanResult.Reason.ALREADY_CONTACT)
+        // Both phones showing an invitation and scanning each other's would each answer, drop their
+        // own invitation and be left with two halves of different handshakes that never finish.
+        // The same rule on both phones picks one to answer; the other keeps its invitation.
+        if (showing && hasPendingInvite() && compareKeys(identity.public, est.peerIdentity) > 0) {
+            return ScanResult.Refused(ScanResult.Reason.BOTH_SHOWING)
+        }
         data.tx {
             // They showed their code, so this phone answers instead of inviting.
             data.exec("DELETE FROM pending_invites")
@@ -683,7 +719,20 @@ class Messenger(private val context: Context, private val outer: Store) {
         }
         reindex(id)
         changed()
+        // They are standing next to this phone: meet them again now, not after the pause.
+        _outgoing.tryEmit(Unit)
         return ScanResult.Completed(id, cleanName(est.peerName))
+    }
+
+    private fun hasPendingInvite(): Boolean =
+        data.query("SELECT 1 FROM pending_invites WHERE created_at >= ?", System.currentTimeMillis() - INVITE_LIFETIME_MS) { true }.isNotEmpty()
+
+    private fun compareKeys(a: ByteArray, b: ByteArray): Int {
+        for (i in 0 until minOf(a.size, b.size)) {
+            val d = (a[i].toInt() and 0xff) - (b[i].toInt() and 0xff)
+            if (d != 0) return d
+        }
+        return a.size - b.size
     }
 
     /**
@@ -709,6 +758,7 @@ class Messenger(private val context: Context, private val outer: Store) {
     // Sending ------------------------------------------------------------------------------------
 
     suspend fun send(contactId: String, text: String) = io {
+        if (isLocked) throw LockedException()
         val clean = text.trim()
         require(clean.isNotEmpty() && clean.length <= Payload.MAX_TEXT_CHARS)
         require(clean.toByteArray(Charsets.UTF_8).size <= Payload.MAX_TEXT_BYTES)
@@ -806,7 +856,8 @@ class Messenger(private val context: Context, private val outer: Store) {
         var stored = 0
         var opened = 0
         var refused = 0
-        // One transaction for the batch: a write per envelope would keep the disk busy for long.
+        // One transaction for storing the batch: a write per envelope would keep the disk busy for long.
+        val fresh = ArrayList<Envelope>()
         outer.tx {
             for (bytes in raw) {
                 val env = try {
@@ -827,7 +878,19 @@ class Messenger(private val context: Context, private val outer: Store) {
                     env.id, env.bytes, env.expiryDay, receivedAt(), if (locked) 0 else 1,
                 )
                 stored++
-                if (!locked && tryOpen(env, today)) opened++
+                fresh += env
+            }
+        }
+        // Each is opened on its own: one that fails for an unexpected reason is tried again at the
+        // next unlock and does not undo the others.
+        if (!locked) {
+            for (env in fresh) {
+                try {
+                    if (tryOpen(env, today)) opened++
+                } catch (e: Exception) {
+                    Log.w(TAG, "could not open an envelope: ${e.javaClass.simpleName}")
+                    outer.exec("UPDATE envelopes SET checked = 0 WHERE id = ?", env.id)
+                }
             }
         }
         orderArrivals()
@@ -1013,7 +1076,7 @@ class Messenger(private val context: Context, private val outer: Store) {
         outer.exec("DELETE FROM envelopes WHERE expiry_day < ?", today())
         if (isLocked) return@io
         data.exec("DELETE FROM pending_invites WHERE created_at < ?", System.currentTimeMillis() - INVITE_LIFETIME_MS)
-        deleteOldMessages()
+        if (deleteOldMessages()) changed()
     }
 
     // The tag index ------------------------------------------------------------------------------
@@ -1022,11 +1085,12 @@ class Messenger(private val context: Context, private val outer: Store) {
         if (indexDay == today) return
         tagIndex.clear()
         tagsByContact.clear()
-        indexDay = today
         data.query("SELECT id FROM contacts") { it.getString(0) }.forEach {
             ageSession(it, today)
             indexContact(it, today)
         }
+        // Only once every contact is in: an index left half built would miss envelopes all day.
+        indexDay = today
     }
 
     /** Once a day, even with nothing arriving: day keys that left the window are deleted. */

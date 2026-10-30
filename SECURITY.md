@@ -21,7 +21,7 @@
   locked, envelopes are still carried; those meant for you are opened when you enter the PIN.
   After wrong PINs the waits are counted on a clock that changing the date does not move.
 - **Being forced to open it.** A second, duress PIN deletes everything silently and opens Pyrsos
-  as if just installed; after wrong PINs it too waits for the wait to end. Optionally, ten wrong PINs
+  as if just installed; it does so even while a wait after wrong PINs is running. Optionally, ten wrong PINs
   in a row delete everything too. Whether a duress PIN exists, and whether the ten-tries wipe is
   on, are sealed with the phone's hardware secret: a copy of the phone does not show them.
 - **Old messages.** Messages can delete themselves from your phone after a day, a week or a month.
@@ -52,6 +52,9 @@ Know these before you depend on it.
 - **Traces on the flash memory.** The database overwrites what it deletes, but flash memory may
   keep old copies of pages elsewhere. They stay encrypted; deleting everything also destroys the
   hardware keys, which leaves them unreadable.
+  The same holds for the database's rollback journal, which briefly keeps earlier copies of pages
+  while a change is written: it is encrypted with the same key and deleted afterwards, not
+  overwritten.
 - **The phone's own software.** Some phones report newly installed apps to their maker or app
   store over the internet (seen on a Samsung phone, which looked Pyrsos up on Google Play). Pyrsos
   has no internet access, but the phone around it may.

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package app.pyrsos.ui
 
-import android.app.Activity
 import android.graphics.Bitmap
 import android.view.WindowManager
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -21,7 +21,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import app.pyrsos.core.QrFrames
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
@@ -60,7 +59,7 @@ fun QrCode(text: String, modifier: Modifier = Modifier) {
         }
     }
     val bitmap = frames[shown]
-    val activity = LocalContext.current as? Activity
+    val activity = LocalActivity.current
     DisposableEffect(activity) {
         val window = activity?.window
         val before = window?.attributes?.screenBrightness

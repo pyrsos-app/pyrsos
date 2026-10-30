@@ -118,6 +118,57 @@ class HandshakeTest {
         refuses { Handshake.complete(second, reply) }
     }
 
+    /** An invitation whose name bytes were swapped, signed again by its own identity key. */
+    private fun inviteWithName(name: ByteArray): ByteArray {
+        val good = Handshake.invite(a, "x".repeat(name.size), day).invite.bytes
+        val body = good.copyOf(good.size - 64)
+        val at = body.size - name.size
+        name.copyInto(body, at)
+        return body + Crypto.sign(a.private, "Pyrsos v1 invite".toByteArray() + body)
+    }
+
+    @Test
+    fun aMalformedMlKemKeyIsRefusedNotACrash() {
+        val good = Handshake.invite(a, "A", day).invite.bytes
+        val body = good.copyOf(good.size - 64)
+        val kemAt = 3 + 1 + 1 + 16 + 2 + 32 * 3
+        for (i in 0 until Crypto.ML_KEM_PUBLIC) body[kemAt + i] = 0xFF.toByte()
+        val bad = body + Crypto.sign(a.private, "Pyrsos v1 invite".toByteArray() + body)
+        try {
+            Handshake.reply(b, "B", bad, day)
+            fail("accepted")
+        } catch (_: MalformedException) {
+        }
+        try {
+            Crypto.mlKemEncapsulate(body.copyOfRange(kemAt, kemAt + Crypto.ML_KEM_PUBLIC))
+            fail("accepted")
+        } catch (_: MalformedException) {
+        }
+    }
+
+    @Test
+    fun badNamesAreRefused() {
+        val bad = listOf(
+            byteArrayOf(0x41, 0xC3.toByte(), 0x28),                          // malformed UTF-8
+            byteArrayOf(0x41, 0xC0.toByte(), 0xAF.toByte()),                 // overlong
+            "A\u0007B".toByteArray(),                                        // control
+            "A\u202EB".toByteArray(),                                        // right-to-left override
+            "A\u2066B".toByteArray(),                                        // isolate
+            "A\u200FB".toByteArray(),                                        // right-to-left mark
+            "A\u0000B".toByteArray(),
+        )
+        for (n in bad) refuses { Handshake.reply(b, "B", inviteWithName(n), day) }
+    }
+
+    @Test
+    fun ordinaryNamesAreAccepted() {
+        for (n in listOf("Alice", "Μαρία", "李雷", "Zoë \uD83D\uDC68\u200D\uD83D\uDC69")) {
+            val bytes = n.toByteArray()
+            Handshake.reply(b, "B", inviteWithName(bytes), day)
+            Handshake.reply(b, n, Handshake.invite(a, n, day).invite.bytes, day)
+        }
+    }
+
     private companion object {
         const val IDENTITY_IN_INVITE = 3 + 1 + 1 + 16 + 2
         const val IDENTITY_IN_REPLY = 3 + 1 + 1 + 16

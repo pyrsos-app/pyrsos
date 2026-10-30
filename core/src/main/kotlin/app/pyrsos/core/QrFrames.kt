@@ -63,8 +63,10 @@ object QrFrames {
 
     private fun parse(text: String): Frame? {
         if (text.length <= HEADER || !text.startsWith(PREFIX)) return null
-        val index = text[2].digitToIntOrNull() ?: return null
-        val count = text[3].digitToIntOrNull() ?: return null
+        // ASCII only: digitToIntOrNull also takes digits of other scripts.
+        if (text[2] !in '0'..'9' || text[3] !in '0'..'9') return null
+        val index = text[2] - '0'
+        val count = text[3] - '0'
         if (count !in 1..MAX_FRAMES || index >= count) return null
         val id = text.substring(4, HEADER)
         if (!id.all { it in '0'..'9' || it in 'A'..'F' }) return null

@@ -78,8 +78,11 @@ class Session internal constructor(
         private const val VERSION = 2
         private const val VERSION_ONE_EPOCH = 1
 
-        /** Receiving epochs kept: the newest in use, one before it for late envelopes, and the next. */
-        const val MAX_EPOCHS = 3
+        /**
+         * Receiving epochs kept: the newest in use, the next, and several before for envelopes
+         * still travelling while the two sides ping-pong. Older sessions hold fewer.
+         */
+        const val MAX_EPOCHS = 5
 
         /**
          * A session just out of the handshake, on the handshake's tags. The inviter's ratchet has

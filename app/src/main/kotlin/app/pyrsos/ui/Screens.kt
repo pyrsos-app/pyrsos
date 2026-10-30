@@ -14,6 +14,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.text.InputFilter
 import android.text.InputType
+import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import androidx.activity.result.contract.ActivityResultContracts
@@ -108,6 +109,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -506,7 +508,7 @@ fun AddContactScreen(messenger: Messenger, onBack: () -> Unit, onContact: (Strin
     fun handle(text: String) {
         scanning = false
         scope.launch {
-            when (val r = messenger.scanned(text)) {
+            when (val r = messenger.scanned(text, showing = step is AddStep.Showing)) {
                 is Messenger.ScanResult.ShowReply -> {
                     error = null
                     step = AddStep.Answering(r.code, r.contactId, r.name, r.identityCode)
@@ -521,6 +523,7 @@ fun AddContactScreen(messenger: Messenger, onBack: () -> Unit, onContact: (Strin
                     Messenger.ScanResult.Reason.REPLY_DOES_NOT_MATCH -> R.string.err_bad_reply
                     Messenger.ScanResult.Reason.STALE_INVITE -> R.string.err_stale_invite
                     Messenger.ScanResult.Reason.ALREADY_CONTACT -> R.string.err_already_contact
+                    Messenger.ScanResult.Reason.BOTH_SHOWING -> R.string.err_both_showing
                 }
             }
         }
@@ -624,7 +627,8 @@ fun ChatScreen(messenger: Messenger, contactId: String, onBack: () -> Unit) {
     val version by messenger.version.collectAsState()
     val contact by produceState<Messenger.ContactRow?>(null, version) { value = messenger.contact(contactId) }
     val messages by produceState(emptyList<Messenger.MessageRow>(), version) { value = messenger.messages(contactId) }
-    var draft by rememberSaveable { mutableStateOf("") }
+    // Not saved: a draft must not outlive a lock, nor sit in the saved state of the activity.
+    var draft by remember { mutableStateOf("") }
     val list = rememberLazyListState()
     val timeFormat = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
     // Messages with a date line before the first one of each day.
@@ -645,12 +649,13 @@ fun ChatScreen(messenger: Messenger, contactId: String, onBack: () -> Unit) {
             onConfirm = {
                 confirm = null
                 scope.launch {
-                    if (what == Forget.CHAT) {
-                        messenger.clearChat(contactId)
-                    } else {
-                        messenger.removeContact(contactId)
-                        onBack()
+                    // Locked in the meantime or already gone: nothing to forget.
+                    try {
+                        if (what == Forget.CHAT) messenger.clearChat(contactId) else messenger.removeContact(contactId)
+                    } catch (_: IllegalStateException) {
+                    } catch (_: NoSuchElementException) {
                     }
+                    if (what == Forget.CONTACT) onBack()
                 }
             },
         )
@@ -675,7 +680,16 @@ fun ChatScreen(messenger: Messenger, contactId: String, onBack: () -> Unit) {
                 onSend = {
                     val text = draft
                     draft = ""
-                    scope.launch { messenger.send(contactId, text) }
+                    scope.launch {
+                        // Locked as it was sent, or the contact just removed: keep what was written.
+                        try {
+                            messenger.send(contactId, text)
+                        } catch (_: IllegalStateException) {
+                            if (draft.isEmpty()) draft = text
+                        } catch (_: NoSuchElementException) {
+                            if (draft.isEmpty()) draft = text
+                        }
+                    }
                 },
             )
         },
@@ -1107,12 +1121,12 @@ private fun PinField(value: String, onValue: (String) -> Unit, label: String, mo
         label = { Text(label) },
         singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, autoCorrectEnabled = false, imeAction = ImeAction.Done),
         modifier = modifier,
     )
 }
 
-/** Chooses a PIN: typed twice, 4 to 8 digits. */
+/** Chooses a PIN: typed twice, [PIN_MIN] to [PIN_MAX] digits. */
 @Composable
 private fun NewPinDialog(title: String, warning: String? = null, onDismiss: () -> Unit, onSet: (String) -> Unit) {
     var first by remember { mutableStateOf("") }
@@ -1150,6 +1164,7 @@ fun PinScreen(messenger: Messenger, onUnlocked: () -> Unit, onWipe: () -> Unit) 
     var now by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
     var checking by remember { mutableStateOf(false) }
     var phoneLocked by remember { mutableStateOf(false) }
+    var keyLost by remember { mutableStateOf(false) }
     LaunchedEffect(waitUntil) {
         while (SystemClock.elapsedRealtime() < waitUntil) {
             now = SystemClock.elapsedRealtime()
@@ -1177,6 +1192,10 @@ fun PinScreen(messenger: Messenger, onUnlocked: () -> Unit, onWipe: () -> Unit) 
                 Messenger.PinCheck.PhoneLocked -> {
                     haptic.performHapticFeedback(HapticFeedbackType.Reject)
                     phoneLocked = true
+                }
+                Messenger.PinCheck.KeyLost -> {
+                    haptic.performHapticFeedback(HapticFeedbackType.Reject)
+                    keyLost = true
                 }
                 is Messenger.PinCheck.Wait -> {
                     haptic.performHapticFeedback(HapticFeedbackType.Reject)
@@ -1212,6 +1231,7 @@ fun PinScreen(messenger: Messenger, onUnlocked: () -> Unit, onWipe: () -> Unit) 
             Spacer(Modifier.height(16.dp))
             Text(
                 when {
+                    keyLost -> stringResource(R.string.pin_key_lost)
                     phoneLocked -> stringResource(R.string.pin_phone_locked)
                     waiting -> stringResource(R.string.pin_wait, ((waitUntil - now + 999) / 1000).toInt())
                     wrong -> stringResource(R.string.pin_wrong)
@@ -1313,7 +1333,9 @@ private fun PrivateTextField(value: String, onValueChange: (String) -> Unit, hin
                     background = null
                     setPadding(0, 0, 0, 0)
                     imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
-                    inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                    importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+                    inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
+                        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
                     maxLines = 6
                     textSize = 16f
                     typeface = ResourcesCompat.getFont(context, R.font.commissioner)
@@ -1371,3 +1393,36 @@ private fun LicencesDialog(onDismiss: () -> Unit) {
     )
 }
 
+
+/**
+ * Shown instead of everything when the phone's hardware key for the database is gone for good
+ * (the phone was reset, or its files restored from elsewhere): the data cannot be opened again.
+ */
+@Composable
+fun DataLostScreen(onStartFresh: () -> Unit) {
+    var confirm by remember { mutableStateOf(false) }
+    Scaffold { pad ->
+        Column(
+            Modifier.padding(pad).fillMaxSize().padding(horizontal = 32.dp, vertical = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Brand(height = 64.dp, stacked = true)
+            Spacer(Modifier.height(32.dp))
+            Text(stringResource(R.string.lost_title), style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(12.dp))
+            Text(stringResource(R.string.lost_note), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(24.dp))
+            Button(onClick = { confirm = true }) { Text(stringResource(R.string.lost_action)) }
+        }
+    }
+    if (confirm) {
+        ConfirmDialog(
+            title = stringResource(R.string.lost_title),
+            text = stringResource(R.string.lost_confirm),
+            action = stringResource(R.string.lost_action),
+            onDismiss = { confirm = false },
+            onConfirm = { confirm = false; onStartFresh() },
+        )
+    }
+}

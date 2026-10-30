@@ -2,10 +2,13 @@
 package app.pyrsos.data
 
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import app.pyrsos.core.Crypto
 import java.security.KeyStore
+import java.security.UnrecoverableKeyException
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -33,13 +36,26 @@ internal object VaultKey {
         return secret to (c.iv + c.doFinal(secret))
     }
 
-    /** The secret back from its wrapped form. Throws while the phone is locked. */
+    /** The hardware key is gone or can never work again: not the same as the phone being locked. */
+    class LostException(message: String) : Exception(message)
+
+    /** The secret back from its wrapped form. Throws while the phone is locked; [LostException] if the key is gone for good. */
     fun unwrap(wrapped: ByteArray): ByteArray {
-        val key = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getKey(ALIAS, null) as SecretKey?
-            ?: throw IllegalStateException("the vault's hardware key is gone")
+        val key = try {
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getKey(ALIAS, null) as SecretKey?
+        } catch (e: UnrecoverableKeyException) {
+            throw LostException("the vault's hardware key cannot be read")
+        } ?: throw LostException("the vault's hardware key is gone")
         val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, wrapped, 0, 12))
-        return c.doFinal(wrapped, 12, wrapped.size - 12)
+        try {
+            c.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, wrapped, 0, 12))
+            return c.doFinal(wrapped, 12, wrapped.size - 12)
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            throw LostException("the vault's hardware key was invalidated")
+        } catch (e: AEADBadTagException) {
+            // The key works but is not the one that wrapped this.
+            throw LostException("the vault's hardware key does not match")
+        }
     }
 
     fun destroy() {
