@@ -678,7 +678,7 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
         const val ANSWER_GAP_MS = 5_000L
         const val ANSWER_PENALTY_MS = 60_000L
         /** Envelopes taken from one address in an hour, on top of the per-meeting limit. */
-        const val MAX_TAKEN_PER_HOUR = 300
+        const val MAX_TAKEN_PER_HOUR = 1_000
         const val ADDRESS_DIAL_GAP_MS = 5_000L
         const val STRANGER_DIAL_GAP_MS = 5_000L
         /** Distinct addresses whose calls could not connect lately before that counts against the radio. */

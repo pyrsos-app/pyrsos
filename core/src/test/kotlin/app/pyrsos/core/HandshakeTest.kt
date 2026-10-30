@@ -173,4 +173,12 @@ class HandshakeTest {
         const val IDENTITY_IN_INVITE = 3 + 1 + 1 + 16 + 2
         const val IDENTITY_IN_REPLY = 3 + 1 + 1 + 16
     }
+
+    @Test
+    fun theHiddenCharactersRefusedInNamesAreTheOnesAppsStrip() {
+        for (c in listOf('\u0000', '\u001B', '\u061C', '\u200E', '\u202E', '\u2066', '\u2028', '\u2029')) {
+            assertTrue("U+%04X".format(c.code), Handshake.isHiddenNameChar(c))
+        }
+        for (c in "aΩ -😀") assertTrue("U+%04X".format(c.code), !Handshake.isHiddenNameChar(c))
+    }
 }

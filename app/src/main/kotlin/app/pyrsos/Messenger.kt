@@ -1191,7 +1191,7 @@ class Messenger(private val context: Context, private val outer: Store) {
 
         /** Names come from other phones: drop control and direction-override characters. */
         fun cleanName(name: String): String =
-            name.filter { c -> !c.isISOControl() && c !in '‎'..'‏' && c !in '‪'..'‮' && c !in '⁦'..'⁩' }
+            name.filter { !Handshake.isHiddenNameChar(it) }
                 .trim()
                 .ifEmpty { "?" }
     }
