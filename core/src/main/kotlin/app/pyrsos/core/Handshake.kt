@@ -255,11 +255,15 @@ object Handshake {
         } catch (e: CharacterCodingException) {
             throw MalformedException("name is not UTF-8")
         }
-        if (name.any { isHiddenChar(it) }) throw MalformedException("name has control characters")
+        if (name.any { isHiddenNameChar(it) }) throw MalformedException("name has control characters")
         return name
     }
 
-    private fun isHiddenChar(c: Char): Boolean =
+    /**
+     * Characters a name must not carry: they could reorder or hide text around it. The app strips
+     * these from the name it makes, so its own codes are never refused by another phone.
+     */
+    fun isHiddenNameChar(c: Char): Boolean =
         Character.getType(c) == Character.CONTROL.toInt() ||
             c == '\u061C' || c in '\u200E'..'\u200F' || c in '\u202A'..'\u202E' || c in '\u2066'..'\u2069' ||
             c == '\u2028' || c == '\u2029'
