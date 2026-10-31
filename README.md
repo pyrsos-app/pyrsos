@@ -31,6 +31,8 @@ calls, no groups yet: only what is needed to send word.
 - **A phone that is taken.** With a PIN, contacts, keys and messages are locked in a vault that
   needs both the PIN and the phone's own screen lock to open. A duress PIN deletes everything;
   messages can delete themselves after a set time; the keyboard is asked not to learn what is typed.
+- **Screenshot protection.** Screenshots and screen recordings show nothing of Pyrsos, and neither
+  does the list of recent apps.
 - **Quiet and light.** No message notifications: open the app to see what arrived. In the
   background it uses the radio's low-power modes and pauses when the battery is low. Android
   requires one silent notice while it relays; it never shows messages.

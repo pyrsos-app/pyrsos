@@ -26,6 +26,8 @@
   on, are sealed with the phone's hardware secret: a copy of the phone does not show them.
 - **Old messages.** Messages can delete themselves from your phone after a day, a week or a month.
 - **Your keyboard.** The message field asks the keyboard not to learn what you type there.
+- **Screenshot protection.** Screenshots and screen recordings show nothing of Pyrsos, and neither
+  does the list of recent apps.
 - **The system log.** Release builds write nothing to it, so it holds no record of meetings.
 - **Impersonation.** You add contacts only in person, from the screen of the phone in front of
   you. Nobody can slip in as one of your contacts through the air.
@@ -55,6 +57,9 @@ Know these before you depend on it.
   The same holds for the database's rollback journal, which briefly keeps earlier copies of pages
   while a change is written: it is encrypted with the same key and deleted afterwards, not
   overwritten.
+- **A camera pointed at the screen, or an app allowed to read the screen.** Blocking screenshots
+  does not stop someone filming the phone, nor an accessibility service the person has allowed:
+  install accessibility apps only if you trust them.
 - **The phone's own software.** Some phones report newly installed apps to their maker or app
   store over the internet (seen on a Samsung phone, which looked Pyrsos up on Google Play). Pyrsos
   has no internet access, but the phone around it may.
