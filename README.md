@@ -56,6 +56,8 @@ searching there would need the location permission; newer phones nearby find it 
 two phones on Android 10 or 11 cannot reach each other directly: their messages need a phone on
 Android 12 or later to pass between them.
 
+GrapheneOS compatible: tested and works.
+
 Pyrsos is distributed only as an APK, signed by the project key: from this repository's
 [Releases](https://github.com/pyrsos-app/pyrsos/releases), from https://pyrsos.app, or from
 another phone over Bluetooth (Settings → Send the app to someone next to you).
