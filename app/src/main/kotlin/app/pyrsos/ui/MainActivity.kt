@@ -55,6 +55,7 @@ import app.pyrsos.nearby.Nearby
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.system.exitProcess
 import kotlinx.coroutines.withContext
@@ -211,16 +212,11 @@ class MainActivity : ComponentActivity() {
                     step { File(applicationInfo.dataDir, "shared_prefs").list()?.forEach { deleteSharedPreferences(it.removeSuffix(".xml")) } }
                     step { getSystemService(NotificationManager::class.java).deleteNotificationChannel(RelayService.CHANNEL) }
                 }
-                // Back at the first screen, as if just installed: an app that simply vanished would
-                // tell whoever is watching that something happened.
-                step {
-                    startActivity(
-                        Intent(this@MainActivity, MainActivity::class.java)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
-                    )
-                }
                 // The permissions it was given go too, as on a phone where it was just installed.
-                // Android takes them back once Pyrsos is no longer on screen.
+                // Android takes them back once Pyrsos is no longer on screen. The request travels to
+                // another process and nothing says when it has arrived, so give it a moment: a
+                // process that exits at once takes the request with it (seen on Android 16).
+                var asked = false
                 step {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         val held = listOf(
@@ -229,8 +225,20 @@ class MainActivity : ComponentActivity() {
                             Manifest.permission.BLUETOOTH_CONNECT,
                             Manifest.permission.CAMERA,
                         ).filter { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
-                        if (held.isNotEmpty()) revokeSelfPermissionsOnKill(held)
+                        if (held.isNotEmpty()) {
+                            revokeSelfPermissionsOnKill(held)
+                            asked = true
+                        }
                     }
+                }
+                if (asked) withContext(NonCancellable) { delay(REVOKE_WAIT_MS) }
+                // Back at the first screen, as if just installed: an app that simply vanished would
+                // tell whoever is watching that something happened.
+                step {
+                    startActivity(
+                        Intent(this@MainActivity, MainActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+                    )
                 }
                 exitProcess(0)
             }
@@ -415,6 +423,9 @@ class MainActivity : ComponentActivity() {
 }
 
 private const val WELCOME_SHOWN = "welcome_shown"
+
+/** How long a wipe waits for Android to receive the request to take the permissions back. */
+private const val REVOKE_WAIT_MS = 1_000L
 
 /** What the security settings show. */
 class Security(val wipeAfterTen: Boolean = false, val hasDuress: Boolean = false, val autoDeleteDays: Int = 0)

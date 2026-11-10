@@ -81,10 +81,9 @@ Know these before you depend on it.
   store over the internet (seen on a Samsung phone, which looked Pyrsos up on Google Play). Pyrsos
   has no internet access, but the phone around it may.
 - **Flooding.** A hostile phone can hand out many junk envelopes. A phone takes at most 1000
-  envelopes an hour from one Bluetooth address and 5000 an hour in all. A hostile phone can change
-  its address, and one that keeps flooding can use up the hour's allowance, so real envelopes wait
-  until the next hour. A phone that is full drops envelopes at random, so the junk pushes out
-  others' envelopes only in proportion to how much of it there is. Your own undelivered messages
+  envelopes an hour from one Bluetooth address, but a hostile phone can change its address. A phone
+  that is full drops envelopes at random, so the junk pushes out others' envelopes only in
+  proportion to how much of it there is. Your own undelivered messages
   are kept while Pyrsos is unlocked; while it is locked they can be pushed out like any other, and
   are sealed again when you next unlock.
 - **A clock that is wrong for long.** After the date jumps ahead Pyrsos waits a day before deleting

@@ -183,8 +183,8 @@ an envelope when it expires.
 
 A phone stores every envelope it receives and passes it on, including the ones it opens: keeping
 only other people's envelopes would show which ones were its own. It takes at most 1000 envelopes
-in one meeting, at most 1000 an hour from one Bluetooth address, whichever side called, and at
-most 5000 an hour from all phones together. It carries at most 20 000. Over that, envelopes that
+in one meeting and at most 1000 an hour from one Bluetooth address, whichever side called. It
+carries at most 20 000. Over that, envelopes that
 claim to last longer than any honest one go first, then envelopes chosen at random, so a phone
 flooding junk pushes out only its share. While Pyrsos is unlocked the phone's own undelivered
 messages stay. While it is locked they can be pushed out like any other; each one pushed out is
