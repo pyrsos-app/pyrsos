@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package app.pyrsos
 
+import android.annotation.SuppressLint
 import android.app.Application
+import android.os.Process
 import android.util.Log
 import app.pyrsos.data.DbKey
 import app.pyrsos.data.Store
@@ -15,6 +17,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.system.exitProcess
 
 class PyrsosApp : Application() {
     /**
@@ -55,8 +58,19 @@ class PyrsosApp : Application() {
         }
     }
 
+    // Not handing the crash on to Android's handler is the point; see below.
+    @SuppressLint("DefaultUncaughtExceptionDelegation")
     override fun onCreate() {
         super.onCreate()
+        if (!BuildConfig.DEBUG) {
+            // A crash ends the process at once, without Android's own handler, which would file a
+            // report with the stack trace in the system's dropbox. Android still writes the crash
+            // to the log itself.
+            Thread.setDefaultUncaughtExceptionHandler { _, _ ->
+                Process.killProcess(Process.myPid())
+                exitProcess(10)
+            }
+        }
         // A copy of the APK left from sharing the app; it is only needed while the share runs.
         scope.launch(Dispatchers.IO) { File(cacheDir, "share").deleteRecursively() }
         val outer = try {

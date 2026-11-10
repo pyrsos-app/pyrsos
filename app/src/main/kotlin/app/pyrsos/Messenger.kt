@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import app.pyrsos.core.Base45
+import app.pyrsos.core.ClockGuard
 import app.pyrsos.core.Crypto
 import app.pyrsos.core.CryptoException
 import app.pyrsos.core.Envelope
@@ -157,13 +158,14 @@ class Messenger(private val context: Context, private val outer: Store) {
                 (SELECT text FROM messages m WHERE m.contact_id = c.id ORDER BY at DESC LIMIT 1),
                 (SELECT COUNT(*) FROM messages m WHERE m.contact_id = c.id AND m.outgoing = 0 AND m.read = 0)
                FROM contacts c ORDER BY c.last_at DESC""",
-        ) { ContactRow(it.getString(0), it.getString(1), IdentityCode.of(it.getBlob(2)), it.getInt(3) == 1, it.getString(4), it.getInt(5)) }
+        ) { ContactRow(it.getString(0), cleanName(it.getString(1)), IdentityCode.of(it.getBlob(2)), it.getInt(3) == 1, it.getString(4), it.getInt(5)) }
     }
 
     suspend fun contact(id: String): ContactRow? = io {
         if (isLocked) return@io null
         data.query("SELECT id, name, identity, confirmed FROM contacts WHERE id = ?", id) {
-            ContactRow(it.getString(0), it.getString(1), IdentityCode.of(it.getBlob(2)), it.getInt(3) == 1, null, 0)
+            // Cleaned again: names saved by older versions may still carry invisible characters.
+            ContactRow(it.getString(0), cleanName(it.getString(1)), IdentityCode.of(it.getBlob(2)), it.getInt(3) == 1, null, 0)
         }.firstOrNull()
     }
 
@@ -323,22 +325,28 @@ class Messenger(private val context: Context, private val outer: Store) {
      */
     suspend fun setPin(pin: String?): Boolean = io {
         if (isLocked) throw LockedException()
-        when {
-            pin != null && vault == null && !vaultMode -> createVault(pin)
-            pin != null -> {
-                if (isDuressPin(pin)) return@io false
-                rewrapVault(pin)
+        // Bytes from here on, zeroed when done; the String itself cannot be wiped.
+        val bytes = pin?.toByteArray()
+        try {
+            when {
+                bytes != null && vault == null && !vaultMode -> createVault(bytes)
+                bytes != null -> {
+                    if (isDuressPin(bytes)) return@io false
+                    rewrapVault(bytes)
+                }
+                vault != null -> removeVault()
+                // No PIN and none to remove: nothing changed, so the wrong-PIN counters stay.
+                else -> return@io true
             }
-            vault != null -> removeVault()
-            // No PIN and none to remove: nothing changed, so the wrong-PIN counters stay.
-            else -> return@io true
+        } finally {
+            bytes?.fill(0)
         }
         outer.exec("DELETE FROM settings WHERE k IN (?, ?, ?)", PIN_FAILURES, PIN_WAIT, OLD_PIN_WAIT)
         changed()
         true
     }
 
-    private fun createVault(pin: String) {
+    private fun createVault(pin: ByteArray) {
         val (hw, hwWrapped) = VaultKey.create()
         val salt = Crypto.random(16)
         val key = Crypto.random(32)
@@ -364,7 +372,7 @@ class Messenger(private val context: Context, private val outer: Store) {
     }
 
     /** The salt stays for the vault's life, so the duress marker made with it stays valid. */
-    private fun rewrapVault(pin: String) {
+    private fun rewrapVault(pin: ByteArray) {
         val key = vaultKey ?: throw LockedException()
         val hw = VaultKey.unwrap(setting(VAULT_HW)!!)
         putSetting(VAULT_KEY, wrapVaultKey(key, pin, setting(VAULT_SALT)!!, hw))
@@ -397,21 +405,20 @@ class Messenger(private val context: Context, private val outer: Store) {
         }
     }
 
-    private fun pinKeys(pin: String, salt: ByteArray, hw: ByteArray): PinKeys {
-        val pinBytes = pin.toByteArray()
-        val stretched = Crypto.scrypt(pinBytes, salt)
+    /** [pin] is left as it is: whoever passed it zeroes it. */
+    private fun pinKeys(pin: ByteArray, salt: ByteArray, hw: ByteArray): PinKeys {
+        val stretched = Crypto.scrypt(pin, salt)
         val material = stretched + hw
         return PinKeys(
             Crypto.hkdf(salt, material, "Pyrsos vault key", 32),
             Crypto.hkdf(salt, material, "Pyrsos duress key", 32),
         ).also {
-            pinBytes.fill(0)
             stretched.fill(0)
             material.fill(0)
         }
     }
 
-    private fun wrapVaultKey(key: ByteArray, pin: String, salt: ByteArray, hw: ByteArray): ByteArray {
+    private fun wrapVaultKey(key: ByteArray, pin: ByteArray, salt: ByteArray, hw: ByteArray): ByteArray {
         val keys = pinKeys(pin, salt, hw)
         val nonce = Crypto.random(Crypto.NONCE)
         return (nonce + Crypto.seal(keys.vault, nonce, key, VAULT_AAD)).also { keys.clear() }
@@ -432,11 +439,11 @@ class Messenger(private val context: Context, private val outer: Store) {
      * hardware secret, so a copy of the phone cannot be searched for the duress PIN, nor even
      * tell a marker from the random bytes that stand in for one when there is none.
      */
-    private fun isDuress(pin: String, keys: PinKeys): Boolean {
+    private fun isDuress(pin: ByteArray, keys: PinKeys): Boolean {
         val stored = setting(DURESS) ?: return false
         if (stored.size == OLD_DURESS_SIZE) {
             // Made before the marker: salt and scrypt hash. Replaced when a duress PIN is set again.
-            return constantTimeEquals(Crypto.scrypt(pin.toByteArray(), stored.copyOf(16)), stored.copyOfRange(16, stored.size))
+            return constantTimeEquals(Crypto.scrypt(pin, stored.copyOf(16)), stored.copyOfRange(16, stored.size))
         }
         return try {
             Crypto.open(keys.duress, stored.copyOf(Crypto.NONCE), stored.copyOfRange(Crypto.NONCE, stored.size), DURESS_AAD)
@@ -446,7 +453,7 @@ class Messenger(private val context: Context, private val outer: Store) {
         }
     }
 
-    private fun isDuressPin(pin: String): Boolean {
+    private fun isDuressPin(pin: ByteArray): Boolean {
         val hw = VaultKey.unwrap(setting(VAULT_HW)!!)
         val keys = pinKeys(pin, setting(VAULT_SALT)!!, hw)
         hw.fill(0)
@@ -491,24 +498,36 @@ class Messenger(private val context: Context, private val outer: Store) {
         hw.fill(0)
     }
 
-    /** Opens the vault with [pin], then opens whatever arrived while it was locked. */
-    suspend fun unlock(pin: String): PinCheck = io {
-        setting(OLD_PIN)?.let { return@io unlockOld(pin, it) }
+    /**
+     * Opens the vault with [pin], then opens whatever arrived while it was locked. [pin] holds the
+     * digits as bytes and is zeroed here when done.
+     */
+    suspend fun unlock(pin: ByteArray): PinCheck = io {
+        try {
+            unlockWith(pin)
+        } finally {
+            pin.fill(0)
+        }
+    }
+
+    private fun unlockWith(pin: ByteArray): PinCheck {
+        // Before the PIN is even stretched: during a wait every PIN, the duress one too, only waits.
+        val wait = waitLeft()
+        if (wait > 0) return PinCheck.Wait(wait)
+        setting(OLD_PIN)?.let { return unlockOld(pin, it) }
         val hw = try {
             VaultKey.unwrap(setting(VAULT_HW)!!)
         } catch (e: VaultKey.LostException) {
             Log.w(TAG, "vault hardware key lost: ${e.message}")
-            return@io PinCheck.KeyLost
+            return PinCheck.KeyLost
         } catch (e: Exception) {
             Log.w(TAG, "vault hardware secret unavailable: ${e.javaClass.simpleName}")
-            return@io PinCheck.PhoneLocked
+            return PinCheck.PhoneLocked
         }
         val keys = pinKeys(pin, setting(VAULT_SALT)!!, hw)
         try {
-            if (isDuress(pin, keys)) return@io PinCheck.Wipe
-            val wait = waitLeft()
-            if (wait > 0) return@io PinCheck.Wait(wait)
-            val opened = openVaultKey(keys) ?: return@io wrongPin(traps(hw))
+            if (isDuress(pin, keys)) return PinCheck.Wipe
+            val opened = openVaultKey(keys) ?: return wrongPin(traps(hw))
             // Vaults made before the traps were sealed: seal them now.
             if (setting(TRAPS) == null) {
                 outer.tx {
@@ -517,7 +536,7 @@ class Messenger(private val context: Context, private val outer: Store) {
                     outer.exec("DELETE FROM settings WHERE k = ?", WIPE_AFTER)
                 }
             }
-            opened(opened)
+            return opened(opened)
         } finally {
             keys.clear()
             hw.fill(0)
@@ -525,10 +544,8 @@ class Messenger(private val context: Context, private val outer: Store) {
     }
 
     /** A PIN from before the vault existed: checked the old way, then the vault is built with it. */
-    private fun unlockOld(pin: String, old: ByteArray): PinCheck {
-        val wait = waitLeft()
-        if (wait > 0) return PinCheck.Wait(wait)
-        if (!constantTimeEquals(Crypto.scrypt(pin.toByteArray(), old.copyOf(16)), old.copyOfRange(16, old.size))) return wrongPin(traps())
+    private fun unlockOld(pin: ByteArray, old: ByteArray): PinCheck {
+        if (!constantTimeEquals(Crypto.scrypt(pin, old.copyOf(16)), old.copyOfRange(16, old.size))) return wrongPin(traps())
         vaultMode = false
         createVault(pin)
         return opened(vaultKey!!)
@@ -541,10 +558,23 @@ class Messenger(private val context: Context, private val outer: Store) {
             vaultKey = key
         }
         indexDay = -1
-        openWhatArrived()
-        deleteOldMessages()
+        // The vault is open: nothing after this may fail the unlock. Each step that fails is logged
+        // and comes round again (the next meeting, the next housekeeping round).
+        guarded("open what arrived") { openUnchecked() }
+        // Receipts that just opened may have marked messages delivered; own envelopes pushed out
+        // while locked are sealed again now, not at a housekeeping round that may come while locked.
+        guarded("renew undelivered") { renewUndelivered(now = false) }
+        guarded("delete old messages") { deleteOldMessages() }
         changed()
         return PinCheck.Ok
+    }
+
+    private fun guarded(what: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Exception) {
+            Log.w(TAG, "after unlocking, could not $what: ${e.javaClass.simpleName}")
+        }
     }
 
     private fun wrongPin(traps: Int): PinCheck {
@@ -593,6 +623,8 @@ class Messenger(private val context: Context, private val outer: Store) {
         tagIndex.clear()
         tagsByContact.clear()
         indexDay = -1
+        // What was on screen is garbage now; collecting it soon leaves it in memory for less time.
+        Runtime.getRuntime().gc()
     }
 
     /**
@@ -606,8 +638,13 @@ class Messenger(private val context: Context, private val outer: Store) {
             return@io true
         }
         val hw = VaultKey.unwrap(setting(VAULT_HW)!!)
-        val keys = pinKeys(pin, setting(VAULT_SALT)!!, hw)
-        hw.fill(0)
+        val bytes = pin.toByteArray()
+        val keys = try {
+            pinKeys(bytes, setting(VAULT_SALT)!!, hw)
+        } finally {
+            bytes.fill(0)
+            hw.fill(0)
+        }
         try {
             openVaultKey(keys)?.let {
                 it.fill(0)
@@ -641,13 +678,34 @@ class Messenger(private val context: Context, private val outer: Store) {
 
     suspend fun autoDeleteDays(): Int = io { setting(AUTO_DELETE)?.decodeToString()?.toIntOrNull() ?: 0 }
 
-    /** Deletes this phone's messages older than the chosen age. Only while the data is open. */
-    private fun deleteOldMessages(): Boolean {
+    /**
+     * Deletes this phone's messages older than the chosen age. Only while the data is open, and
+     * only while the clock is believed ([clockBelieved]).
+     */
+    private fun deleteOldMessages(believed: Boolean = clockBelieved()): Boolean {
+        if (!believed) return false
         val days = setting(AUTO_DELETE)?.decodeToString()?.toIntOrNull() ?: return false
         val cutoff = System.currentTimeMillis() - days * 86_400_000L
         if (data.query("SELECT 1 FROM messages WHERE at < ? LIMIT 1", cutoff) { 1 }.isEmpty()) return false
         data.exec("DELETE FROM messages WHERE at < ?", cutoff)
         return true
+    }
+
+    /**
+     * Whether the date may be deleted by. One jump of the clock far ahead (a wrong network time)
+     * must not delete every envelope and message at once; see [ClockGuard].
+     */
+    private fun clockBelieved(): Boolean {
+        // The boot count is missing on some phones (-1): 0 then, which decoding accepts. A restart
+        // still shows, as the time since boot going back.
+        val boot = maxOf(0, bootCount()).toLong()
+        val now = SystemClock.elapsedRealtime()
+        val today = today()
+        val guard = ClockGuard.decode(setting(CLOCK)?.decodeToString())
+            ?: ClockGuard.start(today, boot, now).also { putSetting(CLOCK, it.encode().encodeToByteArray()) }
+        val verdict = guard.check(today, boot, now)
+        if (verdict.next !== guard) putSetting(CLOCK, verdict.next.encode().encodeToByteArray())
+        return verdict.believed
     }
 
     private fun setting(k: String): ByteArray? =
@@ -869,22 +927,23 @@ class Messenger(private val context: Context, private val outer: Store) {
         changed()
     }
 
-    class Ingested(val stored: Int, val opened: Int, val refused: Int)
+    class Ingested(val stored: Int, val refused: Int)
+
+    /** Envelopes were stored since [openArrived] or the unlock last tried them. Store thread only. */
+    private var arrivedUnchecked = false
 
     /**
-     * Takes envelopes from another phone. Every envelope is stored and carried on the same way,
-     * including the ones this phone opens: keeping only other people's would show anyone who
-     * compares inventories which envelopes were for this phone.
+     * Takes envelopes from another phone and only stores them. Every envelope is stored and carried
+     * on the same way, including the ones this phone opens: keeping only other people's would show
+     * anyone who compares inventories which envelopes were for this phone. They are tried against
+     * the contacts in [openArrived], after the exchange: opening them here would make the time
+     * until this phone answers show the other phone which envelopes were for it.
      */
     suspend fun ingest(raw: List<ByteArray>): Ingested = io {
         val today = today()
-        val locked = isLocked
-        if (!locked) ensureIndex(today)
         var stored = 0
-        var opened = 0
         var refused = 0
         // One transaction for storing the batch: a write per envelope would keep the disk busy for long.
-        val fresh = ArrayList<Envelope>()
         outer.tx {
             for (bytes in raw) {
                 val env = try {
@@ -899,31 +958,38 @@ class Messenger(private val context: Context, private val outer: Store) {
                 }
                 val known = outer.query("SELECT 1 FROM envelopes WHERE id = ?", env.id) { 1 }.isNotEmpty()
                 if (known) continue
-                // Locked: carry it now, try it against the contacts when the PIN is entered.
+                // checked = 0: still to be tried against the contacts, after the exchange or at the
+                // next unlock.
                 outer.exec(
-                    "INSERT INTO envelopes (id, data, expiry_day, received_at, checked) VALUES (?, ?, ?, ?, ?)",
-                    env.id, env.bytes, env.expiryDay, receivedAt(), if (locked) 0 else 1,
+                    "INSERT INTO envelopes (id, data, expiry_day, received_at, checked) VALUES (?, ?, ?, ?, 0)",
+                    env.id, env.bytes, env.expiryDay, receivedAt(),
                 )
                 stored++
-                fresh += env
             }
         }
-        // Each is opened on its own: one that fails for an unexpected reason is tried again at the
-        // next unlock and does not undo the others.
-        if (!locked) {
-            for (env in fresh) {
-                try {
-                    if (tryOpen(env, today)) opened++
-                } catch (e: Exception) {
-                    Log.w(TAG, "could not open an envelope: ${e.javaClass.simpleName}")
-                    outer.exec("UPDATE envelopes SET checked = 0 WHERE id = ?", env.id)
-                }
-            }
+        if (stored > 0) {
+            arrivedUnchecked = true
+            changed()
         }
-        orderArrivals()
+        Ingested(stored, refused)
+    }
+
+    /**
+     * After an exchange: tries what arrived against the contacts, then drops envelopes over
+     * capacity. In that order, so an envelope for this phone is tried before it can be pushed
+     * out. While locked only the dropping is done; the rest waits for the PIN ([unlock]).
+     */
+    suspend fun openArrived() = io {
+        // Nothing new: no need to scan thousands of envelopes after every meeting.
+        if (!arrivedUnchecked) return@io
+        if (isLocked) {
+            arrivedUnchecked = false
+            evictOverCapacity()
+            return@io
+        }
+        val opened = openUnchecked()
         evictOverCapacity()
-        if (stored > 0) changed()
-        Ingested(stored, opened, refused)
+        if (opened > 0) changed()
     }
 
     /** Messages opened since the last [orderArrivals]. Used only on the store's own thread. */
@@ -988,21 +1054,37 @@ class Messenger(private val context: Context, private val outer: Store) {
 
     private fun ackDelay(): Long = ACK_DELAY_MIN_MS + (random.nextDouble() * (ACK_DELAY_MAX_MS - ACK_DELAY_MIN_MS)).toLong()
 
-    /** After unlocking: tries every envelope that came in while the vault was locked. */
-    private fun openWhatArrived() {
+    /**
+     * Tries every envelope not yet tried against the contacts: after an exchange, and at unlock
+     * for all that came while the vault was locked. Returns how many opened. Needs the data open.
+     */
+    private fun openUnchecked(): Int {
+        arrivedUnchecked = false
         val today = today()
         ensureIndex(today)
         val pending = outer.query("SELECT id, data FROM envelopes WHERE checked = 0 AND expiry_day >= ?", today) { it.getBlob(0) to it.getBlob(1) }
-        for ((id, bytes) in pending) {
-            try {
-                tryOpen(Envelope.parse(bytes), today)
-            } catch (_: MalformedException) {
-            } catch (e: CryptoException) {
-                Log.w(TAG, "could not open an envelope that arrived while locked: ${e.message}")
+        var opened = 0
+        // Marked tried a batch at a time, in one write each. Every envelope is marked whatever
+        // happened to it: one that keeps failing must not fail every unlock until it expires. A
+        // text lost this way is never acknowledged, so its writer seals it again.
+        for (chunk in pending.chunked(CHECK_BATCH)) {
+            for ((_, bytes) in chunk) {
+                try {
+                    if (tryOpen(Envelope.parse(bytes), today)) opened++
+                } catch (_: MalformedException) {
+                } catch (e: Exception) {
+                    Log.w(TAG, "could not open an envelope: ${e.javaClass.simpleName}")
+                }
             }
-            outer.exec("UPDATE envelopes SET checked = 1 WHERE id = ?", id)
+            outer.tx { chunk.forEach { (id, _) -> outer.exec("UPDATE envelopes SET checked = 1 WHERE id = ?", id) } }
         }
-        orderArrivals()
+        try {
+            orderArrivals()
+        } catch (e: Exception) {
+            arrivals.clear()
+            Log.w(TAG, "could not order what arrived: ${e.javaClass.simpleName}")
+        }
+        return opened
     }
 
     /** Opens an envelope whose tag matched. Inside the transaction that stored it. */
@@ -1081,6 +1163,11 @@ class Messenger(private val context: Context, private val outer: Store) {
      */
     suspend fun resendUndelivered(now: Boolean = false): Int = io {
         if (isLocked) return@io 0
+        renewUndelivered(now)
+    }
+
+    /** [resendUndelivered] on the store's thread, with the data open. */
+    private fun renewUndelivered(now: Boolean): Int {
         val renewBy = if (now) Int.MAX_VALUE else today() + RESEND_DAYS_AHEAD
         val undelivered = data.query(
             """SELECT m.id, m.contact_id, m.text, m.sent_at, m.envelope_id FROM messages m
@@ -1091,7 +1178,7 @@ class Messenger(private val context: Context, private val outer: Store) {
             val expiry = envelope?.let { outer.query("SELECT expiry_day FROM envelopes WHERE id = ?", it) { c -> c.getInt(0) }.firstOrNull() }
             expiry == null || expiry <= renewBy
         }
-        if (due.isEmpty()) return@io 0
+        if (due.isEmpty()) return 0
         sealing { out ->
             for ((text, contactId, _) in due) {
                 data.exec("UPDATE messages SET envelope_id = ? WHERE id = ?", seal(contactId, text, out), text.id)
@@ -1099,15 +1186,20 @@ class Messenger(private val context: Context, private val outer: Store) {
         }
         changed()
         _outgoing.tryEmit(Unit)
-        due.size
+        return due.size
     }
 
-    /** Housekeeping: expired envelopes always; old invitations and messages while the data is open. */
+    /**
+     * Housekeeping: expired envelopes always; old invitations and messages while the data is open.
+     * Envelopes and messages are deleted by date only while the clock is believed. Envelopes past
+     * their date are never offered or handed on meanwhile, so waiting does no harm.
+     */
     suspend fun dropExpired() = io {
-        outer.exec("DELETE FROM envelopes WHERE expiry_day < ?", today())
+        val believed = clockBelieved()
+        if (believed) outer.exec("DELETE FROM envelopes WHERE expiry_day < ?", today())
         if (isLocked) return@io
         data.exec("DELETE FROM pending_invites WHERE created_at < ?", System.currentTimeMillis() - INVITE_LIFETIME_MS)
-        if (deleteOldMessages()) changed()
+        if (deleteOldMessages(believed)) changed()
     }
 
     // The tag index ------------------------------------------------------------------------------
@@ -1128,10 +1220,8 @@ class Messenger(private val context: Context, private val outer: Store) {
     private fun ageSession(contactId: String, today: Int) {
         try {
             data.exec("UPDATE contacts SET session = ? WHERE id = ?", loadSession(contactId).aged(today).encode(), contactId)
-        } catch (e: CryptoException) {
-            Log.w(TAG, "could not age a session: ${e.message}")
-        } catch (e: MalformedException) {
-            Log.w(TAG, "could not age a session: ${e.message}")
+        } catch (e: Exception) {
+            Log.w(TAG, "could not age a session: ${e.javaClass.simpleName}")
         }
     }
 
@@ -1145,11 +1235,8 @@ class Messenger(private val context: Context, private val outer: Store) {
     private fun indexContact(contactId: String, today: Int) {
         val slots = try {
             loadSession(contactId).expected(today)
-        } catch (e: CryptoException) {
-            Log.w(TAG, "could not index a contact: ${e.message}")
-            emptyList()
-        } catch (e: MalformedException) {
-            Log.w(TAG, "could not index a contact: ${e.message}")
+        } catch (e: Exception) {
+            Log.w(TAG, "could not index a contact: ${e.javaClass.simpleName}")
             emptyList()
         }
         tagsByContact[contactId] = slots.map { slot -> slot.tag.toHex().also { tagIndex[it] = contactId to slot } }
@@ -1180,6 +1267,10 @@ class Messenger(private val context: Context, private val outer: Store) {
         private const val PIN_FAILURES = "pin_failures"
         private const val PIN_WAIT = "pin_wait"
         private const val OLD_PIN_WAIT = "pin_wait_until"
+        /** [ClockGuard]'s state: when the date was last believed. */
+        private const val CLOCK = "clock"
+        /** Envelopes marked tried per transaction. */
+        private const val CHECK_BATCH = 100
         private const val PIN_FREE_TRIES = 5
         // Debug builds wait a tenth as long, so the ten-tries wipe can be tested in minutes.
         private val PIN_FIRST_WAIT_MS = if (BuildConfig.DEBUG) 3_000L else 30_000L
@@ -1217,12 +1308,17 @@ class Messenger(private val context: Context, private val outer: Store) {
                 bytes += n
                 i += Character.charCount(cp)
             }
-            return sb.toString()
+            // Cut between a joiner and what it joins: clean again, so no joiner is left at the end.
+            return cleanName(sb.toString())
         }
 
-        /** Names come from other phones: drop control and direction-override characters. */
+        /**
+         * Names come from other phones: drop control and direction-override characters, and every
+         * character that shows nothing ([Handshake.visibleName]).
+         */
         fun cleanName(name: String): String =
-            name.filter { !Handshake.isHiddenNameChar(it) }
+            Handshake.visibleName(name)
+                .filter { !Handshake.isHiddenNameChar(it) }
                 .trim()
                 .ifEmpty { "?" }
     }

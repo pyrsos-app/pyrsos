@@ -39,12 +39,13 @@ import java.io.OutputStream
  * its own DONE could cut off the other's last envelopes. Each side therefore waits for the other's
  * GOT before it closes. Envelopes are counted as handed over only after that GOT; envelopes
  * received are kept as they arrive, in batches, so a channel that breaks halfway loses nothing
- * that came through.
+ * that came through. They are only stored here: opening them waits until the exchange has ended
+ * ([Messenger.openArrived]), so the time to GOT does not show whether one was for this phone.
  */
 internal class Sync(
     input: InputStream,
     output: OutputStream,
-    /** The most envelopes this meeting may take, on top of [MAX_ACCEPT]: a per-peer allowance. */
+    /** The most envelopes this meeting may take, on top of [MAX_ACCEPT]: what is left of the hourly allowance. */
     private val maxAccept: Int = Int.MAX_VALUE,
     /** Also cut off a peer that sends too slowly to be worth a channel; for phones that called us. */
     private val strict: Boolean = false,
@@ -76,7 +77,7 @@ internal class Sync(
         }
     }
 
-    class Result(val peerNonce: Int, val received: Int, val sent: Int, val opened: Int)
+    class Result(val peerNonce: Int, val received: Int, val sent: Int)
 
     /**
      * [expectNonce]: the nonce this phone called, which the other must give in its HELLO; a phone
@@ -129,7 +130,6 @@ internal class Sync(
             expecting = wanted.size >= MIN_PROGRESS_ENVELOPES
             val batch = ArrayList<ByteArray>()
             var received = 0
-            var opened = 0
             try {
                 while (true) {
                     val (type, body) = frame()
@@ -142,7 +142,7 @@ internal class Sync(
                             taken = received
                             expecting = wanted.size >= MIN_PROGRESS_ENVELOPES
                             if (batch.size >= INGEST_BATCH) {
-                                opened += messenger.ingest(batch.toList()).opened
+                                messenger.ingest(batch.toList())
                                 batch.clear()
                             }
                         }
@@ -152,10 +152,10 @@ internal class Sync(
                 }
             } finally {
                 expecting = false
-                if (batch.isNotEmpty()) withContext(NonCancellable) { opened += messenger.ingest(batch.toList()).opened }
+                if (batch.isNotEmpty()) withContext(NonCancellable) { messenger.ingest(batch.toList()) }
             }
             theirsDone.complete(Unit)
-            Triple(peerNonce, received, opened)
+            peerNonce to received
         }
 
         val writer = async(Dispatchers.IO) {
@@ -190,14 +190,14 @@ internal class Sync(
             sent
         }
 
-        val (peerNonce, received, opened) = reader.await()
+        val (peerNonce, received) = reader.await()
         val sent = writer.await()
         // Their GOT: everything we sent was read. Without it nothing counts as handed over, and the
         // next meeting offers the same envelopes again.
         expect(GOT)
         watchdog.cancel()
         messenger.markHanded(sent)
-        Result(peerNonce, received, sent.size, opened)
+        Result(peerNonce, received, sent.size)
     }
 
     private fun send(type: Int, body: ByteArray) {

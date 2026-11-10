@@ -104,6 +104,7 @@
     <string name="pin_unlock">Open</string>
     <string name="pin_wrong">Wrong PIN.</string>
     <string name="pin_wait">Too many tries. Wait %d seconds.</string>
+    <string name="pin_failed">Could not open. Try again.</string>
     <string name="wipe_title">Delete everything</string>
     <string name="wipe_short">Deletes all contacts, messages and your identity from this phone. Cannot be undone.</string>
     <string name="wipe_note">All contacts, messages and your identity are deleted from this phone, together with the key that opens them. This cannot be undone. Messages that have already left this phone are not deleted from other phones. Pyrsos closes; open it again to start over with a new identity code.</string>

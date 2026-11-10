@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package app.pyrsos.ui
 
+import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Color
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
@@ -215,6 +218,19 @@ class MainActivity : ComponentActivity() {
                         Intent(this@MainActivity, MainActivity::class.java)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
                     )
+                }
+                // The permissions it was given go too, as on a phone where it was just installed.
+                // Android takes them back once Pyrsos is no longer on screen.
+                step {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        val held = listOf(
+                            Manifest.permission.BLUETOOTH_SCAN,
+                            Manifest.permission.BLUETOOTH_ADVERTISE,
+                            Manifest.permission.BLUETOOTH_CONNECT,
+                            Manifest.permission.CAMERA,
+                        ).filter { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+                        if (held.isNotEmpty()) revokeSelfPermissionsOnKill(held)
+                    }
                 }
                 exitProcess(0)
             }

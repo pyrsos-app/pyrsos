@@ -24,13 +24,22 @@
   as if just installed; after wrong PINs it too waits for the wait to end. Optionally, ten wrong PINs
   in a row delete everything too. Whether a duress PIN exists, and whether the ten-tries wipe is
   on, are sealed with the phone's hardware secret: a copy of the phone does not show them.
+  Deleting everything destroys the hardware keys first, so what is left of the files cannot be
+  opened even if the deleting is cut short. On Android 13 and later the permissions Pyrsos was
+  given are also taken back once it leaves the screen, as on a phone where it was just installed.
 - **Old messages.** Messages can delete themselves from your phone after a day, a week or a month.
 - **Your keyboard.** The message field asks the keyboard not to learn what you type there.
 - **Screenshot protection.** Screenshots and screen recordings show nothing of Pyrsos, and neither
   does the list of recent apps.
-- **The system log.** Release builds write nothing to it, so it holds no record of meetings.
+- **The system log.** Release builds write nothing to it, so it holds no record of meetings. If
+  Pyrsos crashes, Android itself writes the crash to the log; Pyrsos closes without handing Android
+  a crash report to keep.
 - **Impersonation.** You add contacts only in person, from the screen of the phone in front of
-  you. Nobody can slip in as one of your contacts through the air.
+  you. Nobody can slip in as one of your contacts through the air. Names are shown without
+  invisible characters, so a name cannot hide one to look like another. Names are still free for
+  anyone to pick; the identity code is what tells people apart.
+- **Another app pretending to be Pyrsos.** Pyrsos keeps its screen in a task of its own, so another
+  app cannot put its own screen in Pyrsos's place when Pyrsos is opened.
 
 ## What it does not protect
 
@@ -41,11 +50,18 @@ Know these before you depend on it.
   The announcement and the channel change every 10 minutes, but a determined listener can tell
   phones apart by the radio itself. A phone that connects may also read your phone's Bluetooth
   name: Settings shows it, and a neutral one such as "Phone" is best.
+- **Being recognised by what you carry.** A phone that meets yours twice can tell it is the same
+  phone from the envelopes it offers, even after the announcement has changed. It can also see
+  which envelopes are new on it, and so roughly when you wrote or received something: a receipt
+  is a new envelope too, sent within a minute.
 - **When you send.** An envelope shows the day its carrying ends, and so roughly the day it was
   written. The first phone to hold an envelope is usually the one that wrote it.
 - **A phone that is unlocked and in someone else's hands with Pyrsos open.** They can read what is
   on it. Without a PIN, someone who can run code on the phone after it has been unlocked once can
   read Pyrsos's data too: set a PIN.
+- **The phone's memory.** When Pyrsos locks it closes the vault and wipes its key, but Android may
+  keep parts of what was on screen in memory for a while. Someone who can read the memory of a
+  running phone may find them.
 - **A short PIN against someone who already has your phone's screen lock.** The PIN is stretched
   with scrypt, but four digits are still few: use six or more. Without a screen lock on the phone,
   the PIN alone guards the vault.
@@ -59,14 +75,22 @@ Know these before you depend on it.
   overwritten.
 - **A camera pointed at the screen, or an app allowed to read the screen.** Blocking screenshots
   does not stop someone filming the phone, nor an accessibility service the person has allowed:
-  install accessibility apps only if you trust them.
+  install accessibility apps only if you trust them. An app you have allowed to draw over other
+  apps can still cover Pyrsos.
 - **The phone's own software.** Some phones report newly installed apps to their maker or app
   store over the internet (seen on a Samsung phone, which looked Pyrsos up on Google Play). Pyrsos
   has no internet access, but the phone around it may.
-- **Flooding.** A hostile phone can hand out many junk envelopes. A phone that is full drops
-  envelopes at random, so the junk pushes out others' envelopes only in proportion to how much of
-  it there is. Your own undelivered messages are kept while Pyrsos is unlocked, and sealed again if
-  they are pushed out.
+- **Flooding.** A hostile phone can hand out many junk envelopes. A phone takes at most 1000
+  envelopes an hour from one Bluetooth address and 5000 an hour in all. A hostile phone can change
+  its address, and one that keeps flooding can use up the hour's allowance, so real envelopes wait
+  until the next hour. A phone that is full drops envelopes at random, so the junk pushes out
+  others' envelopes only in proportion to how much of it there is. Your own undelivered messages
+  are kept while Pyrsos is unlocked; while it is locked they can be pushed out like any other, and
+  are sealed again when you next unlock.
+- **A clock that is wrong for long.** After the date jumps ahead Pyrsos waits a day before deleting
+  by it, so a wrong date for a short while deletes nothing; one that stays wrong for more than a
+  day does. After the phone was off for several days, messages set to disappear can stay up to a
+  day longer.
 - **Linking by someone who holds your phone.** With your phone's keys, someone can tell which
   envelopes of the last 18 days or so belong to a conversation since its last reply, and recognise new
   ones until both sides write again, though not read the old ones.

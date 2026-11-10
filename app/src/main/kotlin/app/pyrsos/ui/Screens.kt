@@ -85,6 +85,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -127,6 +128,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -1197,8 +1199,12 @@ private fun NewPinDialog(title: String, warning: String? = null, onDismiss: () -
 fun PinScreen(messenger: Messenger, onUnlocked: () -> Unit, onWipe: () -> Unit) {
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
-    var pin by remember { mutableStateOf("") }
+    // The digits as bytes, zeroed after each try: Strings could not be wiped and would stay in
+    // memory until collected.
+    val digits = remember { ByteArray(PIN_MAX) }
+    var length by remember { mutableIntStateOf(0) }
     var wrong by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
     var waitUntil by remember { mutableStateOf(0L) }
     var now by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
     var checking by remember { mutableStateOf(false) }
@@ -1215,35 +1221,50 @@ fun PinScreen(messenger: Messenger, onUnlocked: () -> Unit, onWipe: () -> Unit) 
     val enabled = !checking && !waiting
 
     fun submit() {
+        if (checking || length < PIN_MIN) return
         checking = true
+        // Messenger zeroes its copy when done.
+        val attempt = digits.copyOf(length)
         scope.launch {
-            when (val r = messenger.unlock(pin)) {
-                Messenger.PinCheck.Ok -> {
-                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
-                    onUnlocked()
+            try {
+                when (val r = messenger.unlock(attempt)) {
+                    Messenger.PinCheck.Ok -> {
+                        haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                        onUnlocked()
+                    }
+                    Messenger.PinCheck.Wrong -> {
+                        haptic.performHapticFeedback(HapticFeedbackType.Reject)
+                        wrong = true
+                    }
+                    // Says nothing different on screen: whoever holds the phone sees an ordinary start.
+                    Messenger.PinCheck.Wipe -> onWipe()
+                    Messenger.PinCheck.PhoneLocked -> {
+                        haptic.performHapticFeedback(HapticFeedbackType.Reject)
+                        phoneLocked = true
+                    }
+                    Messenger.PinCheck.KeyLost -> {
+                        haptic.performHapticFeedback(HapticFeedbackType.Reject)
+                        keyLost = true
+                    }
+                    is Messenger.PinCheck.Wait -> {
+                        haptic.performHapticFeedback(HapticFeedbackType.Reject)
+                        wrong = true
+                        waitUntil = SystemClock.elapsedRealtime() + r.millis
+                    }
                 }
-                Messenger.PinCheck.Wrong -> {
-                    haptic.performHapticFeedback(HapticFeedbackType.Reject)
-                    wrong = true
-                }
-                // Says nothing different on screen: whoever holds the phone sees an ordinary start.
-                Messenger.PinCheck.Wipe -> onWipe()
-                Messenger.PinCheck.PhoneLocked -> {
-                    haptic.performHapticFeedback(HapticFeedbackType.Reject)
-                    phoneLocked = true
-                }
-                Messenger.PinCheck.KeyLost -> {
-                    haptic.performHapticFeedback(HapticFeedbackType.Reject)
-                    keyLost = true
-                }
-                is Messenger.PinCheck.Wait -> {
-                    haptic.performHapticFeedback(HapticFeedbackType.Reject)
-                    wrong = true
-                    waitUntil = SystemClock.elapsedRealtime() + r.millis
-                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Anything unexpected is shown as a failed try, never a crash: a crash here would
+                // come back at every unlock.
+                haptic.performHapticFeedback(HapticFeedbackType.Reject)
+                failed = true
+            } finally {
+                attempt.fill(0)
+                digits.fill(0)
+                length = 0
+                checking = false
             }
-            pin = ""
-            checking = false
         }
     }
 
@@ -1258,12 +1279,12 @@ fun PinScreen(messenger: Messenger, onUnlocked: () -> Unit, onWipe: () -> Unit) 
             Text(stringResource(R.string.pin_prompt), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.height(16.dp)) {
-                repeat(maxOf(PIN_MIN, pin.length)) { i ->
-                    val filled = i < pin.length
+                repeat(maxOf(PIN_MIN, length)) { i ->
+                    val filled = i < length
                     Box(
                         Modifier.size(14.dp).clip(CircleShape)
                             .background(if (filled) MaterialTheme.colorScheme.primary else Color.Transparent)
-                            .border(1.5.dp, if (wrong && pin.isEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, CircleShape),
+                            .border(1.5.dp, if ((wrong || failed) && length == 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, CircleShape),
                     )
                 }
             }
@@ -1273,6 +1294,7 @@ fun PinScreen(messenger: Messenger, onUnlocked: () -> Unit, onWipe: () -> Unit) 
                     keyLost -> stringResource(R.string.pin_key_lost)
                     phoneLocked -> stringResource(R.string.pin_phone_locked)
                     waiting -> stringResource(R.string.pin_wait, ((waitUntil - now + 999) / 1000).toInt())
+                    failed -> stringResource(R.string.pin_failed)
                     wrong -> stringResource(R.string.pin_wrong)
                     else -> ""
                 },
@@ -1287,18 +1309,26 @@ fun PinScreen(messenger: Messenger, onUnlocked: () -> Unit, onWipe: () -> Unit) 
                     row.forEach { key ->
                         val ok = key == "✓"
                         val active = enabled && when (key) {
-                            "⌫" -> pin.isNotEmpty()
-                            "✓" -> pin.length >= PIN_MIN
-                            else -> pin.length < PIN_MAX
+                            "⌫" -> length > 0
+                            "✓" -> length >= PIN_MIN
+                            else -> length < PIN_MAX
                         }
                         Surface(
                             onClick = {
                                 wrong = false
+                                failed = false
                                 if (key != "✓") haptic.performHapticFeedback(HapticFeedbackType.KeyboardTap)
                                 when (key) {
-                                    "⌫" -> pin = pin.dropLast(1)
+                                    // Checked again: two quick taps can come before the keys update.
+                                    "⌫" -> if (length > 0) {
+                                        length--
+                                        digits[length] = 0
+                                    }
                                     "✓" -> submit()
-                                    else -> pin += key
+                                    else -> if (length < PIN_MAX) {
+                                        digits[length] = key[0].code.toByte()
+                                        length++
+                                    }
                                 }
                             },
                             enabled = active,

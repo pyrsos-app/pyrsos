@@ -63,6 +63,17 @@ internal object DbKey {
 
     }
 
+    /**
+     * True only when both halves are surely gone: the keystore has no such key and there is no
+     * wrapped key file. Any doubt (the keystore not ready, say) answers false.
+     */
+    fun gone(context: Context): Boolean = try {
+        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        !ks.containsAlias(ALIAS) && !File(context.noBackupFilesDir, FILE).exists()
+    } catch (_: Exception) {
+        false
+    }
+
     /** Deletes the hardware key and the wrapped database key: the database can never open again. */
     fun destroy(context: Context) {
         try {

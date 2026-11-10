@@ -54,10 +54,12 @@
         android:theme="@style/Theme.Pyrsos"
         tools:targetApi="s">
 
+        <!-- A task of its own (no affinity): another app cannot put its screen in Pyrsos's place. -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
+            android:taskAffinity=""
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

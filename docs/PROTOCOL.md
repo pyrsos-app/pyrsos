@@ -16,11 +16,14 @@ cannot carry someone else's public key.
 People compare a short **identity code** instead of the 32-byte key: the first 60 bits of
 `SHA-256("Pyrsos v1 identity code" || identity public key)` in Crockford base 32, as three groups
 of four (`ZA0N-0J45-TEMX` for an all-zero key). It never changes while the installation keeps its
-key; a new installation gets a new code. Names are free; the code is what tells people apart. The code is 60 bits, so finding a second key
-with the same code takes about 2^60 hashes: out of reach of a casual attacker, not of a determined
-one. It is meant for people comparing it in person, next to the signed QR codes, and is not
-lengthened because phones of different versions must show the same text. Names must be valid UTF-8
-without control characters or bidirectional formatting marks; a code with one is refused.
+key; a new installation gets a new code. Names are free; the code is what tells people apart. The
+code is 60 bits, so finding a second key with the same code takes about 2^60 hashes: out of reach
+of a casual attacker, not of a determined one. It is meant for people comparing it in person, next
+to the signed QR codes, and is not lengthened because phones of different versions must show the
+same text. Names must be valid UTF-8 without control characters or bidirectional formatting marks;
+a code with one is refused. Names are also shown without invisible characters (zero-width ones and
+the like), keeping the joiners that emoji, Persian and Indic writing need. A code carrying them is
+still accepted, for phones on older versions; only what is shown changes.
 
 ## Adding a contact
 
@@ -66,7 +69,10 @@ the message key expanded by HKDF into a ChaCha20-Poly1305 key and nonce. The ass
 
 B starts as the sender (initiator) with `rB` against `rA`. A, knowing `rB` from the reply, takes
 the step a first received message would cause and makes a new ratchet key at once, so either side
-may write first. At most 1000 skipped messages per step, 2000 stored skipped keys (the oldest go first).
+may write first. At most 10 000 skipped messages per step; only the keys of the newest 2000 are
+kept, and the oldest go first. The writer's phone uses a new message number each time it renews an
+undelivered message, so a long time out of reach must not end the conversation. Phones on 0.2.0
+and earlier still stop at 1000.
 
 ## Envelopes
 
@@ -91,8 +97,9 @@ key(d, c) = HMAC(k(d), "key" || c)
 The sender uses the next counter on today's date (never an earlier day than it last used). The
 expiry day is the slot's day plus 14. The recipient expects the last 15 days and the next 2, and per
 day 64 counters past the highest seen, up to 4096 a day; counters more than 512 behind the highest
-seen are given up. Used slots are remembered so an envelope opens once; days that leave the window
-are forgotten together with their keys, once a day even when nothing arrives. The window moves at
+seen are given up. Used slots are remembered so an envelope opens once; counters given up are no
+longer remembered either, and an envelope on one is refused. Days that leave the window are
+forgotten together with their keys, once a day even when nothing arrives. The window moves at
 most 3 days per call and stays 3 days behind what is expected, so one reading of a wrong clock
 cannot delete the keys of a conversation that is more than a few weeks old.
 
@@ -103,6 +110,13 @@ reaches that day. The two phones recover when a received message turns the ratch
 a sender on the new epoch from the clock's current day; if neither can write to the other, removing
 and adding the contact again starts afresh. A clock wrong forward while a contact is under about
 three weeks old can cost the receiver up to 3 days of its first keys.
+
+What is deleted by date, expired envelopes and messages set to disappear, is not deleted on one
+reading of the clock. The phone also counts the time since it started, on a clock that setting the
+date does not move. If the date is more than 2 days ahead of the date it last believed plus the
+time that has passed since on that clock, deleting waits until the date has stayed ahead for 24
+hours of the phone running, added up across restarts. Envelopes past their date are still never
+offered or handed on in the meantime.
 
 **Epochs.** The chains are replaced with every turn of the ratchet, so someone who copied a phone's
 keys stops recognising the conversation's envelopes once both sides have written again. The first
@@ -144,13 +158,17 @@ DONE
 GOT                                     after reading the other's DONE
 ```
 
-The inventory is a random part of what the phone carries, in random order and different each
-time, so it cannot be used to recognise the phone from one meeting to the next; the phone's own
-undelivered messages are always in it. Each id asked for is sent once however often it is asked.
+The inventory is in random order. A phone carrying more than 2000 envelopes offers a random 2000
+of them, with its own undelivered messages always among them; one carrying 2000 or fewer offers
+them all. So a phone met twice can be recognised by what it carries, and the envelopes that are
+new on it since last time show (see [SECURITY.md](../SECURITY.md)). Each id asked for is sent once
+however often it is asked.
 
 Closing a Bluetooth socket drops data not yet sent, so neither side closes before it has read the
 other's GOT. Received envelopes are stored as they arrive, a hundred at a time, so a channel cut
-halfway keeps what came through; sent ones count as handed over only after GOT, so a cut channel
+halfway keeps what came through. They are tried against the contacts only after the exchange has
+ended, so how long a phone takes to answer GOT does not show whether an envelope was for it. Sent
+ones count as handed over only after GOT, so a cut channel
 never inflates the count and the same envelopes are offered again at the next meeting.
 
 An acknowledgement is not sealed at once but after a random delay of 6 to 60 seconds per message:
@@ -164,8 +182,12 @@ acknowledgement is replaced by the next. Only the writer's phone renews; every o
 an envelope when it expires.
 
 A phone stores every envelope it receives and passes it on, including the ones it opens: keeping
-only other people's envelopes would show which ones were its own. It carries at most 20 000. Over that, envelopes that claim to last longer than any honest one go
-first, then envelopes chosen at random, so a phone flooding junk pushes out only its share. While
-the phone is unlocked its own undelivered messages stay; if one goes anyway, it is sealed again.
+only other people's envelopes would show which ones were its own. It takes at most 1000 envelopes
+in one meeting, at most 1000 an hour from one Bluetooth address, whichever side called, and at
+most 5000 an hour from all phones together. It carries at most 20 000. Over that, envelopes that
+claim to last longer than any honest one go first, then envelopes chosen at random, so a phone
+flooding junk pushes out only its share. While Pyrsos is unlocked the phone's own undelivered
+messages stay. While it is locked they can be pushed out like any other; each one pushed out is
+sealed again as soon as Pyrsos is unlocked.
 With a PIN set, nothing in the database that opens without it tells the phone's own envelopes from
 the ones it carries, and it keeps only the day each arrived.

@@ -128,6 +128,11 @@ class Store private constructor(file: File, key: ByteArray, migrations: List<Lis
         /** Throws [DbKey.LostException] if the key that opens the database is gone for good. */
         fun outer(context: Context): Store {
             val file = File(context.noBackupFilesDir, FILE)
+            if (file.length() > 0L && DbKey.gone(context)) {
+                // A wipe that was cut short: the keys went first, so nothing can open these files.
+                deleteFiles(context, FILE)
+                deleteFiles(context, VAULT_FILE)
+            }
             return Store(file, DbKey.load(context, fresh = file.length() == 0L), OUTER)
         }
 
@@ -142,15 +147,27 @@ class Store private constructor(file: File, key: ByteArray, migrations: List<Lis
         }
 
         /**
-         * Destroys everything Pyrsos keeps on this phone: both database files and the hardware keys
-         * that open them. Without those keys, any copy of the files that flash memory keeps behind
-         * is unreadable. Close both databases first.
+         * Destroys everything Pyrsos keeps on this phone: the hardware keys that open both
+         * databases, then the files. Without those keys, any copy of the files that flash memory
+         * keeps behind is unreadable. The keys go first: that is the part that cannot be undone,
+         * and files left by a wipe cut short are deleted at the next start ([outer]). Every step
+         * runs even if another fails; the first failure is thrown at the end. Close both databases
+         * first.
          */
         fun destroy(context: Context) {
-            deleteFiles(context, FILE)
-            deleteFiles(context, VAULT_FILE)
-            DbKey.destroy(context)
-            VaultKey.destroy()
+            var failure: Throwable? = null
+            fun step(block: () -> Unit) {
+                try {
+                    block()
+                } catch (e: Throwable) {
+                    if (failure == null) failure = e
+                }
+            }
+            step { DbKey.destroy(context) }
+            step { VaultKey.destroy() }
+            step { deleteFiles(context, FILE) }
+            step { deleteFiles(context, VAULT_FILE) }
+            failure?.let { throw it }
         }
 
         private val SCHEMA_V1 = listOf(

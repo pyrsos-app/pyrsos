@@ -31,6 +31,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +39,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -134,6 +136,14 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
     private val answeringAddresses = ConcurrentHashMap.newKeySet<String>()
     private val answerAfter = ConcurrentHashMap<String, Long>()
     private val taken = ConcurrentHashMap<String, Pair<Long, Int>>()
+
+    /**
+     * Envelopes taken from all addresses together this hour, since a flooding phone can change its
+     * address: when the hour began and how many. Exchanges run in parallel; guarded by [takenAllLock].
+     */
+    private val takenAllLock = Any()
+    private var takenAllStart = Long.MIN_VALUE / 2
+    private var takenAllCount = 0
 
     /** One outgoing call at a time; the radio is shared and the store is single-threaded anyway. */
     private val exchange = Mutex()
@@ -515,7 +525,9 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
                 return // closed by stop()
             }
             // A phone that opens channel after channel gets only a few at a time, and one address
-            // only one, after a pause, until its hourly allowance of envelopes is used up.
+            // only one, after a pause, until its hourly allowance of envelopes is used up. Only its
+            // own allowance: with the overall one used up the call is still answered, taking
+            // nothing, so phones that can only answer (Android 10 and 11) can still hand theirs over.
             val address = try {
                 socket.remoteDevice.address
             } catch (_: Exception) {
@@ -523,7 +535,7 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
                 continue
             }
             if (SystemClock.elapsedRealtime() < (answerAfter[address] ?: Long.MIN_VALUE / 2) ||
-                budgetLeft(address) <= 0 || !answeringAddresses.add(address)
+                addressBudgetLeft(address) <= 0 || !answeringAddresses.add(address)
             ) {
                 closeQuietly(socket)
                 continue
@@ -550,16 +562,33 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
         }
     }
 
-    /** Envelopes this phone may still take from [address] this hour. */
-    private fun budgetLeft(address: String): Int {
+    /**
+     * Envelopes this phone may still take from [address] this hour, within what is left for all
+     * phones together. Parallel exchanges may overshoot a little; that is fine.
+     */
+    private fun budgetLeft(address: String): Int = minOf(addressBudgetLeft(address), overallBudgetLeft())
+
+    private fun addressBudgetLeft(address: String): Int {
         val e = taken[address] ?: return MAX_TAKEN_PER_HOUR
         return if (SystemClock.elapsedRealtime() - e.first > HOUR_MS) MAX_TAKEN_PER_HOUR else maxOf(0, MAX_TAKEN_PER_HOUR - e.second)
+    }
+
+    private fun overallBudgetLeft(): Int = synchronized(takenAllLock) {
+        if (SystemClock.elapsedRealtime() - takenAllStart > HOUR_MS) MAX_TAKEN_PER_HOUR_ALL else maxOf(0, MAX_TAKEN_PER_HOUR_ALL - takenAllCount)
     }
 
     private fun charge(address: String, n: Int) {
         if (n <= 0) return
         val now = SystemClock.elapsedRealtime()
         taken.compute(address) { _, e -> if (e == null || now - e.first > HOUR_MS) now to n else e.first to e.second + n }
+        synchronized(takenAllLock) {
+            if (now - takenAllStart > HOUR_MS) {
+                takenAllStart = now
+                takenAllCount = n
+            } else {
+                takenAllCount += n
+            }
+        }
     }
 
     /**
@@ -612,15 +641,16 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
         return try {
             open()
             connected = true
-            // A phone that called us may push only so much per hour, however often it comes back.
-            sync = Sync(socket.inputStream, socket.outputStream, if (dialed == null) budgetLeft(address) else Int.MAX_VALUE, dialed == null) { closeQuietly(socket) }
+            // A phone may push only so much per hour, however often it comes back and whichever side
+            // called: a hostile phone can make this one call it by advertising a higher nonce.
+            sync = Sync(socket.inputStream, socket.outputStream, budgetLeft(address), dialed == null) { closeQuietly(socket) }
             val r = sync.run(messenger, nonce, dialed)
             // Our GOT may still be on its way; closing now would drop it.
             delay(CLOSE_LINGER_MS)
             // Receipts for what opened go out later, after a random delay (see
             // Messenger.sealDueAcks); sealing them clears this and the phones meet again.
             if (dialed != null) lastSync[dialed] = SystemClock.elapsedRealtime() else answered[address] = SystemClock.elapsedRealtime()
-            Log.i(TAG, "exchange: received ${r.received}, sent ${r.sent}, opened ${r.opened}")
+            Log.i(TAG, "exchange: received ${r.received}, sent ${r.sent}")
             callWorked()
             Outcome.WORKED
         } catch (e: CancellationException) {
@@ -629,9 +659,21 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
             Log.w(TAG, "exchange failed: ${e.javaClass.simpleName}: ${e.message}")
             if (connected) Outcome.FAILED else Outcome.NO_CONNECTION
         } finally {
-            if (dialed == null) charge(address, sync?.taken ?: 0)
+            val took = sync?.taken ?: 0
+            charge(address, took)
             deadline.cancel()
             closeQuietly(socket)
+            // Only now, with the channel closed, is what arrived tried against the contacts: the
+            // other phone cannot time it.
+            if (took > 0) {
+                withContext(NonCancellable) {
+                    try {
+                        messenger.openArrived()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "could not open what arrived: ${e.javaClass.simpleName}")
+                    }
+                }
+            }
         }
     }
 
@@ -679,6 +721,8 @@ class Nearby(private val context: Context, private val messenger: Messenger, pri
         const val ANSWER_PENALTY_MS = 60_000L
         /** Envelopes taken from one address in an hour, on top of the per-meeting limit. */
         const val MAX_TAKEN_PER_HOUR = 1_000
+        /** Envelopes taken from all addresses together in an hour. */
+        const val MAX_TAKEN_PER_HOUR_ALL = 5_000
         const val ADDRESS_DIAL_GAP_MS = 5_000L
         const val STRANGER_DIAL_GAP_MS = 5_000L
         /** Distinct addresses whose calls could not connect lately before that counts against the radio. */
