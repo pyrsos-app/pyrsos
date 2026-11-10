@@ -43,7 +43,7 @@ protects and what it does not.
 
 ## Status
 
-**Preview, version 0.2.0.** It works between phones and has been tested on a handful of them, but
+**Preview, version 0.3.0.** It works between phones and has been tested on a handful of them, but
 the code has not had an independent security audit yet. Do not rely on it as your only way to
 reach people in a real emergency until it has.
 
