@@ -59,6 +59,12 @@ class ByteWriter {
         out.write(b)
     }
 
+    /** A byte string of any size, prefixed with a 4-byte length. */
+    fun bytes32(b: ByteArray) = apply {
+        u32(b.size.toLong())
+        out.write(b)
+    }
+
     fun bytes(): ByteArray = out.toByteArray()
 }
 
@@ -96,6 +102,13 @@ class ByteReader(private val buf: ByteArray) {
     }
 
     fun bytes16(): ByteArray = raw(u16())
+
+    /** Checks the length against what is left before allocating anything. */
+    fun bytes32(): ByteArray {
+        val n = u32()
+        if (n > remaining) throw MalformedException("truncated: need $n, have $remaining")
+        return raw(n.toInt())
+    }
 
     fun end() {
         if (remaining != 0) throw MalformedException("$remaining trailing bytes")

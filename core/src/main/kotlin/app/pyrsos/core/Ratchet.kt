@@ -56,6 +56,9 @@ class Ratchet private constructor(
     /** The tag seed the other side will send on after it has seen this side's current key. */
     internal fun pendingTagSeed(): ByteArray = tagSeed(rootKey)
 
+    /** Skipped keys kept, for tests. */
+    internal fun skippedCount(): Int = skipped.size
+
     fun encrypt(plaintext: ByteArray, ad: ByteArray): Encrypted {
         val chain = cks ?: throw IllegalStateException("no sending chain")
         val (mk, nextCk) = kdfChain(chain)
@@ -121,9 +124,11 @@ class Ratchet private constructor(
             val chain = ckr ?: return
             var ck = chain
             val from = dhr!!
+            // Only the last keys of a long gap could be kept anyway; the chain still walks them all.
+            val keepFrom = until - MAX_STORED_SKIPPED
             while (nr < until) {
                 val (mk, nextCk) = kdfChain(ck)
-                skipped[skippedKey(from, nr)] = mk
+                if (nr >= keepFrom) skipped[skippedKey(from, nr)] = mk
                 ck = nextCk
                 nr += 1
             }
@@ -160,8 +165,12 @@ class Ratchet private constructor(
     companion object {
         private const val VERSION = 1
 
-        /** The most messages one chain may jump over in a single step. */
-        const val MAX_SKIP = 1000L
+        /**
+         * The most messages one chain may jump over in a single step. Large, because the writer
+         * seals an undelivered message again about every two weeks with a new number, so a long time
+         * out of reach can put the first envelope to arrive far ahead.
+         */
+        const val MAX_SKIP = 10_000L
 
         /** The most skipped keys kept per conversation; the oldest go first. */
         const val MAX_STORED_SKIPPED = 2000

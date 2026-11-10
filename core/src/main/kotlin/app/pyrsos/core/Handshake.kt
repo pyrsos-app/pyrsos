@@ -267,4 +267,56 @@ object Handshake {
         Character.getType(c) == Character.CONTROL.toInt() ||
             c == '\u061C' || c in '\u200E'..'\u200F' || c in '\u202A'..'\u202E' || c in '\u2066'..'\u2069' ||
             c == '\u2028' || c == '\u2029'
+
+    /**
+     * [name] without characters that show nothing, so two names that look the same are the same
+     * text: format and control characters, unpaired surrogates and blank-looking fillers. Codes
+     * with them are still accepted (older phones may send them); this is for showing the name.
+     * Zero-width joiners stay only between characters that need them: emoji, and scripts such as
+     * Persian or Devanagari. Does not trim.
+     */
+    fun visibleName(name: String): String {
+        val cps = name.codePoints().toArray()
+        val out = StringBuilder()
+        var prev = -1
+        for (i in cps.indices) {
+            val cp = cps[i]
+            val keep = if (cp == ZWNJ || cp == ZWJ) {
+                prev >= 0 && i + 1 < cps.size && joinable(prev) && joinable(cps[i + 1])
+            } else {
+                !invisible(cp)
+            }
+            if (keep) {
+                out.appendCodePoint(cp)
+                prev = cp
+            }
+        }
+        return out.toString()
+    }
+
+    private const val ZWNJ = 0x200C
+    private const val ZWJ = 0x200D
+    private val BLANK_FILLERS = setOf(0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x034F)
+    private val NO_JOINS = setOf(
+        Character.UnicodeScript.LATIN, Character.UnicodeScript.GREEK, Character.UnicodeScript.CYRILLIC,
+        Character.UnicodeScript.COMMON, Character.UnicodeScript.INHERITED, Character.UnicodeScript.UNKNOWN,
+    )
+
+    private fun invisible(cp: Int): Boolean {
+        if (cp <= 0xFFFF && isHiddenNameChar(cp.toChar())) return true
+        val type = Character.getType(cp)
+        return type == Character.FORMAT.toInt() || type == Character.CONTROL.toInt() ||
+            type == Character.SURROGATE.toInt() || cp in BLANK_FILLERS
+    }
+
+    /** Characters a zero-width joiner or non-joiner may stand next to. */
+    private fun joinable(cp: Int): Boolean {
+        if (invisible(cp)) return false
+        if (cp == 0xFE0F) return true
+        val type = Character.getType(cp)
+        if (type == Character.OTHER_SYMBOL.toInt() || type == Character.MODIFIER_SYMBOL.toInt()) return true
+        val letterOrMark = Character.isLetter(cp) ||
+            type == Character.NON_SPACING_MARK.toInt() || type == Character.COMBINING_SPACING_MARK.toInt()
+        return letterOrMark && Character.UnicodeScript.of(cp) !in NO_JOINS
+    }
 }

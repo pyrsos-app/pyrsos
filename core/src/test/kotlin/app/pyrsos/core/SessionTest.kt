@@ -358,4 +358,134 @@ class SessionTest {
         assertNull(b.receive(far, day))
         assertEquals("far", text(b.receive(far, day + 400)))
     }
+
+    /** The layout of 0.1.0 and 0.2.0: version 2, 2-byte lengths. */
+    private fun asVersionTwo(s: Session): ByteArray {
+        val w = ByteWriter().u8(2).bytes16(s.ratchet.encode()).bytes16(s.sender.encode()).u8(s.receivers.size)
+        for (e in s.receivers) w.u32(e.id.toLong()).bytes16(e.receiver.encode())
+        return w.bytes16(s.ad).bytes()
+    }
+
+    @Test
+    fun sessionsSavedInTheVersionTwoLayoutCarryOn() {
+        val (a, b) = pair()
+        assertEquals("1", text(b.receive(a.send("1", day), day)))
+        assertEquals("2", text(a.receive(b.send("2", day), day)))
+        val inFlight = a.send("in flight during the update", day)
+        a.session = Session.decode(asVersionTwo(a.session))
+        b.session = Session.decode(asVersionTwo(b.session))
+        assertEquals("in flight during the update", text(b.receive(inFlight, day)))
+        repeat(3) { i ->
+            assertEquals("b$i", text(a.receive(b.send("b$i", day), day)))
+            assertEquals("a$i", text(b.receive(a.send("a$i", day), day)))
+        }
+        assertEquals(3, b.session.encode()[0].toInt())
+    }
+
+    @Test
+    fun aSessionWithManySkippedKeysIsStoredAndCarriesOn() {
+        val (a, b) = pair()
+        // 1000 lost on the way; a late one and the next arrive the day after.
+        repeat(999) { a.send("lost", day) }
+        val lateA = a.send("late after 1000", day + 1)
+        assertEquals("jump 1000", text(b.receive(a.send("jump 1000", day + 1), day + 1)))
+        b.session = Session.decode(b.session.encode())
+        assertEquals("late after 1000", text(b.receive(lateA, day + 1)))
+
+        // Then several thousand more, as after months of renewals out of reach.
+        repeat(4000) { a.send("lost", day + 2) }
+        val lateB = a.send("late after 4000", day + 3)
+        assertEquals("jump 4000", text(b.receive(a.send("jump 4000", day + 3), day + 3)))
+        val stored = b.session.encode()
+        assertTrue("past what 2-byte lengths hold: ${stored.size}", stored.size > 0xffff)
+        b.session = Session.decode(stored)
+        assertTrue(b.session.ratchet.skippedCount() <= Ratchet.MAX_STORED_SKIPPED)
+        assertEquals("late after 4000", text(b.receive(lateB, day + 3)))
+        assertEquals("later", text(b.receive(a.send("later", day + 3), day + 3)))
+        assertEquals("reply", text(a.receive(b.send("reply", day + 3), day + 3)))
+        assertEquals("after the reply", text(b.receive(a.send("after the reply", day + 3), day + 3)))
+        b.session = Session.decode(b.session.encode())
+        assertEquals("stored again", text(b.receive(a.send("stored again", day + 3), day + 3)))
+    }
+
+    @Test
+    fun aBadSessionLengthIsMalformed() {
+        val (a, _) = pair()
+        val b = a.session.encode()
+        for (cut in listOf(1, 3, 5, 40, b.size - 1)) {
+            try {
+                Session.decode(b.copyOf(cut))
+                fail("decoded $cut bytes")
+            } catch (_: MalformedException) {
+            }
+        }
+        // A length far past the end.
+        val huge = b.copyOf().also { for (i in 1..4) it[i] = 0x7f }
+        try {
+            Session.decode(huge)
+            fail("decoded")
+        } catch (_: MalformedException) {
+        }
+    }
+
+    private fun slotOf(counter: Long) = TagChain.slot(Crypto.random(32), day, counter)
+
+    @Test
+    fun aBusyDayRemembersOnlyTheUsedCountersStillListenedFor() {
+        var r = TagReceiver.start(Crypto.random(32), day)
+        for (c in 0L..2000L) r = r.consume(slotOf(c), day)
+        assertTrue(r.usedOn(day).size <= TagReceiver.MAX_GAP)
+        assertTrue(r.encode().size < 4 * TagReceiver.MAX_GAP + 100)
+        // Stored and read back, it still refuses what it used and what it gave up.
+        r = TagReceiver.decode(r.encode())
+        for (c in listOf(2000L, 1990L, 2001L - TagReceiver.MAX_GAP)) {
+            try {
+                r.consume(slotOf(c), day)
+                fail("used slot $c accepted again")
+            } catch (_: CryptoException) {
+            }
+        }
+        for (c in listOf(0L, 100L, 2000L - TagReceiver.MAX_GAP)) {
+            try {
+                r.consume(slotOf(c), day)
+                fail("given-up slot $c accepted")
+            } catch (_: CryptoException) {
+            }
+        }
+        val offered = r.expected(day).filter { it.day == day }
+        assertTrue(offered.isNotEmpty() && offered.all { it.counter > 2000 })
+    }
+
+    @Test
+    fun aSkippedSlotInsideTheWindowStillOpensAndOneBehindItIsRefused() {
+        var r = TagReceiver.start(Crypto.random(32), day)
+        for (c in 0L..1000L step 2) r = r.consume(slotOf(c), day)
+        val lowest = 1001L - TagReceiver.MAX_GAP
+        val offered = r.expected(day).filter { it.day == day }.map { it.counter }
+        assertTrue(offered.all { it >= lowest && (it > 1000 || it % 2 == 1L) })
+        assertTrue(lowest + 2 in offered)
+        r = r.consume(slotOf(lowest + 2), day)
+        try {
+            r.consume(slotOf(lowest - 2), day)
+            fail("given-up slot accepted")
+        } catch (_: CryptoException) {
+        }
+    }
+
+    @Test
+    fun aReceiverStoredWithManyUsedCountersLoadsAndShrinks() {
+        // Before used counters were trimmed, a busy day kept all of them.
+        val w = ByteWriter().raw(Crypto.random(32)).u16(day).u16(1).u16(day).u32(3000).u16(3000)
+        for (c in 0L until 3000L) w.u32(c)
+        var r = TagReceiver.decode(w.bytes())
+        assertEquals(3000, r.usedOn(day).size)
+        assertTrue(r.expected(day).filter { it.day == day }.all { it.counter >= 3000 })
+        r = r.consume(slotOf(3000), day)
+        assertTrue(r.usedOn(day).size <= TagReceiver.MAX_GAP)
+        try {
+            r.consume(slotOf(2999), day)
+            fail("used slot accepted again")
+        } catch (_: CryptoException) {
+        }
+    }
 }

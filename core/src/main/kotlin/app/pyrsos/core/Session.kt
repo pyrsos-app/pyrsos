@@ -67,15 +67,18 @@ class Session internal constructor(
     fun encode(): ByteArray {
         val w = ByteWriter()
             .u8(VERSION)
-            .bytes16(ratchet.encode())
-            .bytes16(sender.encode())
+            .bytes32(ratchet.encode())
+            .bytes32(sender.encode())
             .u8(receivers.size)
-        for (e in receivers) w.u32(e.id.toLong()).bytes16(e.receiver.encode())
-        return w.bytes16(ad).bytes()
+        for (e in receivers) w.u32(e.id.toLong()).bytes32(e.receiver.encode())
+        return w.bytes32(ad).bytes()
     }
 
     companion object {
-        private const val VERSION = 2
+        // Version 3 has 4-byte lengths: a ratchet with many skipped keys, or a busy day of tags,
+        // outgrows the 2-byte lengths of version 2. Versions 2 and 1 are still read.
+        private const val VERSION = 3
+        private const val VERSION_SHORT = 2
         private const val VERSION_ONE_EPOCH = 1
 
         /**
@@ -101,14 +104,15 @@ class Session internal constructor(
 
         fun decode(b: ByteArray): Session {
             val r = ByteReader(b)
-            val s = when (r.u8()) {
-                VERSION -> {
-                    val ratchet = Ratchet.decode(r.bytes16())
-                    val sender = TagSender.decode(r.bytes16())
+            val s = when (val version = r.u8()) {
+                VERSION, VERSION_SHORT -> {
+                    val field: () -> ByteArray = if (version == VERSION) r::bytes32 else r::bytes16
+                    val ratchet = Ratchet.decode(field())
+                    val sender = TagSender.decode(field())
                     val count = r.u8()
                     if (count !in 1..MAX_EPOCHS) throw MalformedException("session epochs")
-                    val receivers = List(count) { Epoch(r.u32().toInt(), TagReceiver.decode(r.bytes16())) }
-                    Session(ratchet, sender, receivers, r.bytes16())
+                    val receivers = List(count) { Epoch(r.u32().toInt(), TagReceiver.decode(field())) }
+                    Session(ratchet, sender, receivers, field())
                 }
                 // Sessions from before tag epochs: whichever side turned the ratchet last may hear
                 // next on the epoch that turn made, so listen there too.

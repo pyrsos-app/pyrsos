@@ -181,4 +181,50 @@ class HandshakeTest {
         }
         for (c in "aΩ -😀") assertTrue("U+%04X".format(c.code), !Handshake.isHiddenNameChar(c))
     }
+
+    @Test
+    fun visibleNameDropsCharactersThatShowNothing() {
+        val v = Handshake::visibleName
+        assertEquals("Alice", v("Alice​"))
+        assertEquals("Alice", v("Al­ice"))
+        assertEquals("Alice", v("﻿Alice⁠"))
+        assertEquals("Alice", v("Alice󠁁󠁿"))
+        assertEquals("Alice", v("Al‍ice"))
+        assertEquals("Alice", v("Al‌ice"))
+        assertEquals("Αλίκη", v("Αλ‍ίκη"))
+        assertEquals("Алиса", v("Ал‌иса"))
+        assertEquals("Alice", v("Aliceㅤᅟᅠﾠ⠀͏"))
+        assertEquals("Alice", v("Alice\uD800"))
+        assertEquals("Alice", v("\uDC00Alice"))
+        assertEquals("Alice", v("‮Alice\u0007"))
+        // Joiners only between two characters that use them.
+        assertEquals("👨", v("‍👨‍"))
+        assertEquals("👨‍👩", v("👨‍‍👩"))
+    }
+
+    @Test
+    fun visibleNameKeepsWhatWritingNeeds() {
+        for (name in listOf(
+            "Alice",
+            "Zoë O'Brien",
+            "Αλίκη",
+            "👨‍👩‍👧",
+            "🏳️‍🌈",
+            "👋🏽",
+            "می‌خواهم",
+            "क्‍ष",
+            "李小龙",
+        )) {
+            assertEquals(name, Handshake.visibleName(name))
+        }
+    }
+
+    @Test
+    fun aNameWithInvisibleCharactersIsStillAccepted() {
+        // Older phones may send them; only what is shown changes.
+        val pending = Handshake.invite(a, "Alice​", day)
+        val (_, bSide) = Handshake.reply(b, "Bob", pending.invite.bytes, day)
+        assertEquals("Alice​", bSide.peerName)
+        assertEquals("Alice", Handshake.visibleName(bSide.peerName))
+    }
 }

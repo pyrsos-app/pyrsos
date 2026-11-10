@@ -124,17 +124,27 @@ class TagReceiver private constructor(
     /**
      * Records that [slot] was used. Does not age the window: [today] is one reading of a clock
      * that may be wrong, and a burst of envelopes would repeat it; [aged] does that once a day.
+     *
+     * Only used counters still inside the [MAX_GAP] window are remembered: the ones behind it are
+     * never offered again and are refused here, so a day holds at most [MAX_GAP] of them.
      */
     @Suppress("UNUSED_PARAMETER")
     fun consume(slot: TagSlot, today: Int): TagReceiver {
         val st = days[slot.day]
+        val maxSeen = st?.maxSeen ?: -1L
         if (st != null && slot.counter in st.used) throw CryptoException("tag slot already used")
-        if (st != null && st.used.size >= MAX_USED_PER_DAY) throw CryptoException("too many envelopes in one day")
+        // Given up: it may have been used and since forgotten.
+        if (slot.counter < maxSeen + 1 - MAX_GAP) throw CryptoException("tag slot given up")
         if (slot.counter > MAX_USED_PER_DAY) throw CryptoException("counter out of range")
+        val newMax = maxOf(maxSeen, slot.counter)
+        val used = ((st?.used ?: emptySet()) + slot.counter).filterTo(HashSet()) { it >= newMax + 1 - MAX_GAP }
         val nextDays = HashMap(days)
-        nextDays[slot.day] = DayState(maxOf(st?.maxSeen ?: -1L, slot.counter), (st?.used ?: emptySet()) + slot.counter)
+        nextDays[slot.day] = DayState(newMax, used)
         return TagReceiver(baseKey, baseDay, nextDays)
     }
+
+    /** Used counters remembered for [day], for tests. */
+    internal fun usedOn(day: Int): Set<Long> = days[day]?.used ?: emptySet()
 
     /**
      * Moves the window towards [today] even when nothing arrived: old day keys are then gone. One
