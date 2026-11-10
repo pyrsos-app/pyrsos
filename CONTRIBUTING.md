@@ -47,7 +47,20 @@ You need JDK 17 and the Android SDK (platform 36). Then:
 
 This runs the tests, checks the code and builds the app. Run it before you send a pull request,
 and say in the pull request that it passes. No APK is published for pull requests: to try a change
-on phones, build it yourself with this command.
+on phones, build it yourself with this command. Every pull request is also built with it on
+GitHub.
+
+Every library and plugin the build downloads is checked against
+`gradle/verification-metadata.xml`. If a build fails with a verification error, a file differs from
+the one that was reviewed: do not just update the file to make it pass. If your pull request
+changes the version of a library or plugin, regenerate the file:
+
+```
+./gradlew --write-verification-metadata sha256 clean :core:test :app:lintDebug :app:assembleDebug :app:assembleRelease
+```
+
+Then read the diff before you commit it, and say in the pull request what changed. A build on
+another operating system may need entries of its own: add them the same way.
 
 The cryptography lives in `core/`, a plain Kotlin module whose tests run on any computer. Every
 change there comes with tests.
